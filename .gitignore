@@ -1,0 +1,19 @@
+# Node
+node_modules
+dist
+build
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+.pytest_cache/
+
+# System
+.DS_Store
+Thumbs.db
+
+# Media
+*.mp4
