@@ -1,32 +1,32 @@
 version: '3.8'
 
 services:
-  # MongoDB Service
-  mongodb:
-    image: mongo:latest
-    container_name: admo_mongodb
+  # PostgreSQL Service
+  db:
+    image: postgres:15-alpine
+    container_name: admo_postgres
     restart: always
-    ports:
-      - "27017:27017"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: admin
-      MONGO_INITDB_ROOT_PASSWORD: password123
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: admo_ai
+    ports:
+      - "5432:5432"
     volumes:
-      - mongo_data:/data/db
+      - postgres_data:/var/lib/postgresql/data
 
-  # Mongo Express (Web UI for MongoDB) - Optional but recommended for dev
-  mongo-express:
-    image: mongo-express
-    container_name: admo_mongo_express
+  # PgAdmin (Web UI for PostgreSQL)
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: admo_pgadmin
     restart: always
-    ports:
-      - "8081:8081"
     environment:
-      ME_CONFIG_MONGODB_ADMINUSERNAME: admin
-      ME_CONFIG_MONGODB_ADMINPASSWORD: password123
-      ME_CONFIG_MONGODB_URL: mongodb://admin:password123@mongodb:27017/
+      PGADMIN_DEFAULT_EMAIL: admin@admo.com
+      PGADMIN_DEFAULT_PASSWORD: password
+    ports:
+      - "5050:80"
     depends_on:
-      - mongodb
+      - db
 
 volumes:
-  mongo_data:
+  postgres_data:

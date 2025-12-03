@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { ArrowRight, Lock, Mail, ShieldCheck, User } from 'lucide-react';
+import { motion } from 'framer-motion';
+import ParticleNetwork from '@/components/ParticleNetwork';
 
 const Login = () => {
     const [email, setEmail] = useState('');
@@ -23,14 +25,58 @@ const Login = () => {
     };
 
     return (
-        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4 transition-colors duration-300">
-            <div className="max-w-4xl w-full bg-white dark:bg-slate-900 rounded-3xl shadow-2xl shadow-slate-200 dark:shadow-slate-900/50 overflow-hidden flex flex-col md:flex-row">
+        <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4 transition-colors duration-300 relative overflow-hidden">
+            {/* Animated Background */}
+            <ParticleNetwork />
+
+            <div className="max-w-4xl w-full bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl rounded-3xl shadow-2xl shadow-slate-200 dark:shadow-slate-900/50 overflow-hidden flex flex-col md:flex-row relative z-10 border border-white/20">
+
 
                 {/* Left Side - Branding */}
                 <div className="md:w-1/2 bg-slate-900 dark:bg-slate-950 p-12 flex flex-col justify-between relative overflow-hidden">
-                    <div className="absolute top-0 left-0 w-full h-full opacity-10 pointer-events-none">
-                        <div className="absolute top-10 left-10 w-64 h-64 bg-primary-500 rounded-full blur-3xl"></div>
-                        <div className="absolute bottom-10 right-10 w-64 h-64 bg-secondary-500 rounded-full blur-3xl"></div>
+                    {/* Animated Background */}
+                    <div className="absolute inset-0 w-full h-full">
+                        <div className="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:40px_40px] [mask-image:radial-gradient(ellipse_at_center,black_50%,transparent_100%)]"></div>
+
+                        <motion.div
+                            animate={{
+                                scale: [1, 1.2, 1],
+                                x: [0, 50, 0],
+                                y: [0, 30, 0],
+                            }}
+                            transition={{
+                                duration: 20,
+                                repeat: Infinity,
+                                ease: "easeInOut"
+                            }}
+                            className="absolute -top-20 -left-20 w-96 h-96 bg-primary-500/20 rounded-full blur-3xl"
+                        />
+                        <motion.div
+                            animate={{
+                                scale: [1, 1.5, 1],
+                                x: [0, -30, 0],
+                                y: [0, -50, 0],
+                            }}
+                            transition={{
+                                duration: 25,
+                                repeat: Infinity,
+                                ease: "easeInOut"
+                            }}
+                            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-indigo-500/20 rounded-full blur-3xl"
+                        />
+                        <motion.div
+                            animate={{
+                                scale: [1, 1.3, 1],
+                                x: [0, -40, 0],
+                                y: [0, -20, 0],
+                            }}
+                            transition={{
+                                duration: 22,
+                                repeat: Infinity,
+                                ease: "easeInOut"
+                            }}
+                            className="absolute -bottom-32 -right-32 w-96 h-96 bg-secondary-500/20 rounded-full blur-3xl"
+                        />
                     </div>
 
                     <div className="relative z-10">
