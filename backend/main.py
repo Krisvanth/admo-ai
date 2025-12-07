@@ -259,6 +259,13 @@ async def create_leave_request(leave: LeaveRequest, session: AsyncSession = Depe
         leave.start_date = datetime.strptime(leave.start_date, "%Y-%m-%d").date()
     if isinstance(leave.end_date, str):
         leave.end_date = datetime.strptime(leave.end_date, "%Y-%m-%d").date()
+    
+    # Validate dates
+    today = datetime.now().date()
+    if leave.start_date < today:
+        raise HTTPException(status_code=400, detail="Start date cannot be in the past")
+    if leave.end_date < leave.start_date:
+        raise HTTPException(status_code=400, detail="End date cannot be before start date")
         
     session.add(leave)
     await session.commit()
@@ -304,6 +311,7 @@ async def update_leave_status(
     if not leave:
         raise HTTPException(status_code=404, detail="Leave request not found")
     
+    # Ensure we use the enum member, not just the string value
     leave.status = status
     if comment:
         leave.admin_comment = comment

@@ -35,9 +35,10 @@ class QueryStatus(str, Enum):
     PENDING = "Pending"
 
 class LeaveStatus(str, Enum):
-    PENDING = "Pending"
-    APPROVED = "Approved"
-    REJECTED = "Rejected"
+    Pending = "Pending"
+    Approved = "Approved"
+    Rejected = "Rejected"
+    Cancelled = "Cancelled"
 
 # --- Core Models ---
 
@@ -195,7 +196,8 @@ class LeaveRequest(SQLModel, table=True):
     start_date: date
     end_date: date
     reason: str
-    status: LeaveStatus = Field(default=LeaveStatus.PENDING)
+    hours: Optional[int] = None  # Optional hours for partial day leave
+    status: LeaveStatus = Field(default=LeaveStatus.Pending)
     admin_comment: Optional[str] = None
     teacher_comment: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)

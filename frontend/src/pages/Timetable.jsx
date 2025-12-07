@@ -15,7 +15,8 @@ const Timetable = () => {
     const [leaveForm, setLeaveForm] = useState({
         reason: 'Sick Leave',
         start_date: '',
-        end_date: ''
+        end_date: '',
+        hours: ''
     });
     const [adminComment, setAdminComment] = useState('');
 
@@ -37,22 +38,45 @@ const Timetable = () => {
             setLoading(false);
         }
     };
+    const [formError, setFormError] = useState('');
 
     const handleLeaveSubmit = async () => {
-        if (!leaveForm.start_date || !leaveForm.end_date) return;
+        // Clear previous error
+        setFormError('');
+
+        // Validate dates are selected
+        if (!leaveForm.start_date || !leaveForm.end_date) {
+            setFormError('Please select both start and end dates');
+            return;
+        }
+
+        // Validate start date is not in the past
+        const today = new Date().toISOString().split('T')[0];
+        if (leaveForm.start_date < today) {
+            setFormError('Start date cannot be in the past');
+            return;
+        }
+
+        // Validate end date is not before start date
+        if (leaveForm.end_date < leaveForm.start_date) {
+            setFormError('End date cannot be before start date');
+            return;
+        }
 
         try {
-            await leaveService.createLeave({
+            const leaveData = {
                 school_id: user.school_id,
                 teacher_id: user.id,
-                ...leaveForm
-            });
+                ...leaveForm,
+                hours: leaveForm.hours ? parseInt(leaveForm.hours) : null
+            };
+            await leaveService.createLeave(leaveData);
             fetchLeaves();
-            setLeaveForm({ ...leaveForm, start_date: '', end_date: '', teacher_comment: '' });
+            setLeaveForm({ ...leaveForm, start_date: '', end_date: '', teacher_comment: '', hours: '' });
             // Removed alert as per request
         } catch (error) {
             console.error("Failed to submit leave", error);
-            alert("Failed to submit leave request.");
+            setFormError(error.response?.data?.detail || 'Failed to submit leave request.');
         }
     };
 
@@ -96,7 +120,10 @@ const Timetable = () => {
                                             <div className="flex justify-between items-start mb-2">
                                                 <div>
                                                     <h3 className="font-bold text-slate-900 dark:text-white">{leave.teacher_name}</h3>
-                                                    <p className="text-xs text-slate-500 dark:text-slate-400">{leave.reason} • {leave.start_date} to {leave.end_date}</p>
+                                                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                                                        {leave.reason} • {leave.start_date} to {leave.end_date}
+                                                        {leave.hours && ` • ${leave.hours} hrs`}
+                                                    </p>
                                                     {leave.teacher_comment && (
                                                         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 italic">"{leave.teacher_comment}"</p>
                                                     )}
@@ -171,6 +198,18 @@ const Timetable = () => {
                                     />
                                 </div>
                                 <div>
+                                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Hours (Optional)</label>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        max="24"
+                                        placeholder="e.g. 4"
+                                        className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white"
+                                        value={leaveForm.hours}
+                                        onChange={(e) => setLeaveForm({ ...leaveForm, hours: e.target.value })}
+                                    />
+                                </div>
+                                <div>
                                     <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Comment (Optional)</label>
                                     <textarea
                                         className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white resize-none"
@@ -179,6 +218,9 @@ const Timetable = () => {
                                         onChange={(e) => setLeaveForm({ ...leaveForm, teacher_comment: e.target.value })}
                                     />
                                 </div>
+                                {formError && (
+                                    <p className="text-xs text-red-500 font-medium">{formError}</p>
+                                )}
                                 <button
                                     onClick={handleLeaveSubmit}
                                     className="w-full bg-slate-900 dark:bg-primary-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-800 dark:hover:bg-primary-700"
@@ -198,12 +240,23 @@ const Timetable = () => {
                                             <p className="text-sm font-medium text-slate-900 dark:text-white">{leave.reason}</p>
                                             <p className="text-xs text-slate-500 dark:text-slate-400">{leave.start_date}</p>
                                         </div>
-                                        <span className={`text-xs font-bold px-2 py-1 rounded ${leave.status === 'Approved' ? 'text-green-600 bg-green-50 dark:bg-green-900/20' :
-                                            leave.status === 'Rejected' ? 'text-red-600 bg-red-50 dark:bg-red-900/20' :
-                                                'text-yellow-600 bg-yellow-50 dark:bg-yellow-900/20'
-                                            }`}>
-                                            {leave.status}
-                                        </span>
+                                        <div className="flex items-center gap-3">
+                                            <span className={`text-xs font-bold px-2 py-1 rounded ${leave.status === 'Approved' ? 'text-green-600 bg-green-50 dark:bg-green-900/20' :
+                                                leave.status === 'Rejected' ? 'text-red-600 bg-red-50 dark:bg-red-900/20' :
+                                                    leave.status === 'Cancelled' ? 'text-slate-500 bg-slate-100 dark:bg-slate-800' :
+                                                        'text-yellow-600 bg-yellow-50 dark:bg-yellow-900/20'
+                                                }`}>
+                                                {leave.status}
+                                            </span>
+                                            {(leave.status === 'Pending' || leave.status === 'Approved') && (
+                                                <button
+                                                    onClick={() => handleLeaveAction(leave.id, 'Cancelled')}
+                                                    className="text-xs text-red-500 hover:text-red-700 font-medium"
+                                                >
+                                                    Cancel
+                                                </button>
+                                            )}
+                                        </div>
                                     </div>
                                 ))}
                             </div>
