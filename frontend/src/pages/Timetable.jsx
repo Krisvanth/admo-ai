@@ -1,12 +1,72 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Calendar, UserX, ArrowRight, Bell, Clock, Users, User } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { leaveService } from '@/services/api';
 
 const Timetable = () => {
     const { user } = useAuth();
     const isPrincipal = user?.role === 'principal';
     const [viewMode, setViewMode] = useState('class'); // 'class' or 'teacher'
     const [selectedEntity, setSelectedEntity] = useState('Class 10-A'); // Default selection
+
+    // Leave Management State
+    const [leaves, setLeaves] = useState([]);
+    const [loading, setLoading] = useState(false);
+    const [leaveForm, setLeaveForm] = useState({
+        reason: 'Sick Leave',
+        start_date: '',
+        end_date: ''
+    });
+    const [adminComment, setAdminComment] = useState('');
+
+    useEffect(() => {
+        if (user?.school_id) {
+            fetchLeaves();
+        }
+    }, [user]);
+
+    const fetchLeaves = async () => {
+        try {
+            setLoading(true);
+            const teacherId = isPrincipal ? null : user.id;
+            const data = await leaveService.getLeaves(user.school_id, teacherId);
+            setLeaves(data);
+        } catch (error) {
+            console.error("Failed to fetch leaves", error);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleLeaveSubmit = async () => {
+        if (!leaveForm.start_date || !leaveForm.end_date) return;
+
+        try {
+            await leaveService.createLeave({
+                school_id: user.school_id,
+                teacher_id: user.id,
+                ...leaveForm
+            });
+            fetchLeaves();
+            setLeaveForm({ ...leaveForm, start_date: '', end_date: '', teacher_comment: '' });
+            // Removed alert as per request
+        } catch (error) {
+            console.error("Failed to submit leave", error);
+            alert("Failed to submit leave request.");
+        }
+    };
+
+    const handleLeaveAction = async (leaveId, status) => {
+        try {
+            await leaveService.updateLeaveStatus(leaveId, status, adminComment);
+            fetchLeaves();
+            setAdminComment('');
+        } catch (error) {
+            console.error("Failed to update leave", error);
+        }
+    };
+
+    const pendingLeaves = leaves.filter(l => l.status === 'Pending');
 
     return (
         <div className="space-y-8">
@@ -28,35 +88,48 @@ const Timetable = () => {
                             </h2>
                             {/* Principal View: Approvals */}
                             <div className="space-y-4">
-                                <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-100 dark:border-red-900/30">
-                                    <div className="flex justify-between items-start mb-2">
-                                        <div>
-                                            <h3 className="font-bold text-slate-900 dark:text-white">Sarah Johnson</h3>
-                                            <p className="text-xs text-slate-500 dark:text-slate-400">Science Dept • Sick Leave</p>
-                                        </div>
-                                        <span className="text-xs font-bold bg-white dark:bg-slate-800 text-red-600 dark:text-red-400 px-2 py-1 rounded-lg border border-red-100 dark:border-red-900/30">Today</span>
-                                    </div>
-
-                                    <div className="mt-3 pt-3 border-t border-red-100 dark:border-red-900/30">
-                                        <p className="text-xs font-medium text-slate-600 dark:text-slate-400 mb-2">Suggested Substitutes (AI)</p>
-                                        <div className="space-y-2">
-                                            <div className="flex items-center justify-between bg-white dark:bg-slate-800 p-2 rounded-lg border border-red-100 dark:border-red-900/30">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-6 h-6 bg-slate-100 dark:bg-slate-700 rounded-full flex items-center justify-center text-xs font-bold text-slate-600 dark:text-slate-300">MR</div>
-                                                    <span className="text-sm text-slate-700 dark:text-slate-300">Mr. Rao</span>
+                                {pendingLeaves.length === 0 ? (
+                                    <p className="text-sm text-slate-500">No pending requests.</p>
+                                ) : (
+                                    pendingLeaves.map((leave) => (
+                                        <div key={leave.id} className="p-4 bg-red-50 dark:bg-red-900/20 rounded-xl border border-red-100 dark:border-red-900/30">
+                                            <div className="flex justify-between items-start mb-2">
+                                                <div>
+                                                    <h3 className="font-bold text-slate-900 dark:text-white">{leave.teacher_name}</h3>
+                                                    <p className="text-xs text-slate-500 dark:text-slate-400">{leave.reason} • {leave.start_date} to {leave.end_date}</p>
+                                                    {leave.teacher_comment && (
+                                                        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 italic">"{leave.teacher_comment}"</p>
+                                                    )}
                                                 </div>
-                                                <span className="text-xs text-green-600 dark:text-green-400 font-medium">Free</span>
+                                                <span className="text-xs font-bold bg-white dark:bg-slate-800 text-red-600 dark:text-red-400 px-2 py-1 rounded-lg border border-red-100 dark:border-red-900/30">Pending</span>
+                                            </div>
+
+                                            <div className="mt-3 pt-3 border-t border-red-100 dark:border-red-900/30">
+                                                <input
+                                                    type="text"
+                                                    placeholder="Optional comment..."
+                                                    className="w-full mb-2 p-2 text-xs bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"
+                                                    value={adminComment}
+                                                    onChange={(e) => setAdminComment(e.target.value)}
+                                                />
+                                                <div className="grid grid-cols-2 gap-2 mt-3">
+                                                    <button
+                                                        onClick={() => handleLeaveAction(leave.id, 'Rejected')}
+                                                        className="bg-white dark:bg-slate-800 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 py-2 rounded-lg text-xs font-medium hover:bg-red-50 dark:hover:bg-red-900/20"
+                                                    >
+                                                        Reject
+                                                    </button>
+                                                    <button
+                                                        onClick={() => handleLeaveAction(leave.id, 'Approved')}
+                                                        className="bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-xs font-medium transition-colors shadow-lg shadow-red-500/20"
+                                                    >
+                                                        Approve
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
-
-                                        <div className="grid grid-cols-2 gap-2 mt-3">
-                                            <button className="bg-white dark:bg-slate-800 border border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 py-2 rounded-lg text-xs font-medium hover:bg-red-50 dark:hover:bg-red-900/20">Reject</button>
-                                            <button className="bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg text-xs font-medium transition-colors shadow-lg shadow-red-500/20">
-                                                Approve
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
+                                    ))
+                                )}
                             </div>
                         </div>
                     ) : (
@@ -69,31 +142,70 @@ const Timetable = () => {
                             <div className="space-y-3 mb-6">
                                 <div>
                                     <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Reason</label>
-                                    <select className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white">
+                                    <select
+                                        className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white"
+                                        value={leaveForm.reason}
+                                        onChange={(e) => setLeaveForm({ ...leaveForm, reason: e.target.value })}
+                                    >
                                         <option>Sick Leave</option>
                                         <option>Casual Leave</option>
                                         <option>On Duty</option>
                                     </select>
                                 </div>
                                 <div>
-                                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Date</label>
-                                    <input type="date" className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white" />
+                                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Start Date</label>
+                                    <input
+                                        type="date"
+                                        className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white"
+                                        value={leaveForm.start_date}
+                                        onChange={(e) => setLeaveForm({ ...leaveForm, start_date: e.target.value })}
+                                    />
                                 </div>
-                                <button className="w-full bg-slate-900 dark:bg-primary-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-800 dark:hover:bg-primary-700">Submit Request</button>
+                                <div>
+                                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">End Date</label>
+                                    <input
+                                        type="date"
+                                        className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white"
+                                        value={leaveForm.end_date}
+                                        onChange={(e) => setLeaveForm({ ...leaveForm, end_date: e.target.value })}
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Comment (Optional)</label>
+                                    <textarea
+                                        className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white resize-none"
+                                        rows="2"
+                                        value={leaveForm.teacher_comment || ''}
+                                        onChange={(e) => setLeaveForm({ ...leaveForm, teacher_comment: e.target.value })}
+                                    />
+                                </div>
+                                <button
+                                    onClick={handleLeaveSubmit}
+                                    className="w-full bg-slate-900 dark:bg-primary-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-slate-800 dark:hover:bg-primary-700"
+                                >
+                                    Submit Request
+                                </button>
                             </div>
 
                             <h2 className="font-bold text-slate-900 dark:text-white mb-4 flex items-center gap-2 pt-4 border-t border-slate-100 dark:border-slate-800">
                                 <Clock size={20} className="text-orange-500" />
                                 My History
                             </h2>
-                            <div className="space-y-2">
-                                <div className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700">
-                                    <div>
-                                        <p className="text-sm font-medium text-slate-900 dark:text-white">Sick Leave</p>
-                                        <p className="text-xs text-slate-500 dark:text-slate-400">Nov 12, 2024</p>
+                            <div className="space-y-2 max-h-60 overflow-y-auto">
+                                {leaves.map((leave) => (
+                                    <div key={leave.id} className="flex justify-between items-center p-3 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-100 dark:border-slate-700">
+                                        <div>
+                                            <p className="text-sm font-medium text-slate-900 dark:text-white">{leave.reason}</p>
+                                            <p className="text-xs text-slate-500 dark:text-slate-400">{leave.start_date}</p>
+                                        </div>
+                                        <span className={`text-xs font-bold px-2 py-1 rounded ${leave.status === 'Approved' ? 'text-green-600 bg-green-50 dark:bg-green-900/20' :
+                                            leave.status === 'Rejected' ? 'text-red-600 bg-red-50 dark:bg-red-900/20' :
+                                                'text-yellow-600 bg-yellow-50 dark:bg-yellow-900/20'
+                                            }`}>
+                                            {leave.status}
+                                        </span>
                                     </div>
-                                    <span className="text-xs font-bold text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20 px-2 py-1 rounded">Approved</span>
-                                </div>
+                                ))}
                             </div>
                         </div>
                     )}

@@ -40,4 +40,27 @@ export const authService = {
     }
 };
 
+export const leaveService = {
+    createLeave: async (leaveData) => {
+        const response = await api.post('/leaves/', leaveData);
+        return response.data;
+    },
+    getLeaves: async (schoolId, teacherId = null) => {
+        let url = `/leaves/?school_id=${schoolId}`;
+        if (teacherId) {
+            url += `&teacher_id=${teacherId}`;
+        }
+        const response = await api.get(url);
+        return response.data;
+    },
+    updateLeaveStatus: async (leaveId, status, comment) => {
+        let url = `/leaves/${leaveId}?status=${status}`;
+        if (comment) {
+            url += `&comment=${encodeURIComponent(comment)}`;
+        }
+        const response = await api.put(url);
+        return response.data;
+    }
+};
+
 export default api;

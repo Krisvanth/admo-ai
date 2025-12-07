@@ -3,10 +3,12 @@ from contextlib import asynccontextmanager
 from database import init_db, get_session
 from models import (
     School, User, Student, Class, Attendance, Fee, Timetable, Exam, Mark, 
-    Communication, AIResource, ParentQuery, UserCreate, UserLogin, Token, SchoolCreate
+    Communication, AIResource, ParentQuery, UserCreate, UserLogin, Token, SchoolCreate,
+    LeaveRequest, LeaveStatus, LeaveRequestRead
 )
 from auth_utils import get_password_hash, verify_password, create_access_token
 from typing import List
+from datetime import datetime
 from sqlmodel import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -248,3 +250,65 @@ async def list_schools(session: AsyncSession = Depends(get_session)):
     statement = select(School)
     result = await session.execute(statement)
     return result.scalars().all()
+
+# --- Leave Requests ---
+@app.post("/leaves/", response_model=LeaveRequest)
+async def create_leave_request(leave: LeaveRequest, session: AsyncSession = Depends(get_session)):
+    # Manual conversion of date fields if they are strings (fix for asyncpg error)
+    if isinstance(leave.start_date, str):
+        leave.start_date = datetime.strptime(leave.start_date, "%Y-%m-%d").date()
+    if isinstance(leave.end_date, str):
+        leave.end_date = datetime.strptime(leave.end_date, "%Y-%m-%d").date()
+        
+    session.add(leave)
+    await session.commit()
+    await session.refresh(leave)
+    return leave
+
+@app.get("/leaves/", response_model=List[LeaveRequestRead])
+async def list_leaves(
+    school_id: int, 
+    teacher_id: int = None, 
+    session: AsyncSession = Depends(get_session)
+):
+    # Join with User to get teacher name
+    statement = select(LeaveRequest, User.name).join(User, LeaveRequest.teacher_id == User.id).where(LeaveRequest.school_id == school_id)
+    
+    if teacher_id:
+        statement = statement.where(LeaveRequest.teacher_id == teacher_id)
+    
+    # Order by created_at desc
+    statement = statement.order_by(LeaveRequest.created_at.desc())
+    
+    result = await session.execute(statement)
+    rows = result.all()
+    
+    # Construct response with teacher_name
+    leaves = []
+    for leave, teacher_name in rows:
+        leave_dict = leave.model_dump()
+        leave_dict["teacher_name"] = teacher_name
+        leave_read = LeaveRequestRead.model_validate(leave_dict)
+        leaves.append(leave_read)
+        
+    return leaves
+
+@app.put("/leaves/{leave_id}", response_model=LeaveRequest)
+async def update_leave_status(
+    leave_id: int, 
+    status: LeaveStatus, 
+    comment: str = None, 
+    session: AsyncSession = Depends(get_session)
+):
+    leave = await session.get(LeaveRequest, leave_id)
+    if not leave:
+        raise HTTPException(status_code=404, detail="Leave request not found")
+    
+    leave.status = status
+    if comment:
+        leave.admin_comment = comment
+        
+    session.add(leave)
+    await session.commit()
+    await session.refresh(leave)
+    return leave
