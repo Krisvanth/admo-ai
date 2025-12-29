@@ -34,6 +34,12 @@ class QueryStatus(str, Enum):
     ESCALATED = "Escalated"
     PENDING = "Pending"
 
+class LeaveStatus(str, Enum):
+    Pending = "Pending"
+    Approved = "Approved"
+    Rejected = "Rejected"
+    Cancelled = "Cancelled"
+
 # --- Core Models ---
 
 class SchoolCreate(SQLModel):
@@ -182,3 +188,19 @@ class ParentQuery(SQLModel, table=True):
     ai_response: Optional[str] = None
     status: QueryStatus
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+class LeaveRequest(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    school_id: int = Field(foreign_key="school.id")
+    teacher_id: int = Field(foreign_key="user.id")
+    start_date: date
+    end_date: date
+    reason: str
+    hours: Optional[int] = None  # Optional hours for partial day leave
+    status: LeaveStatus = Field(default=LeaveStatus.Pending)
+    admin_comment: Optional[str] = None
+    teacher_comment: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class LeaveRequestRead(LeaveRequest):
+    teacher_name: str
