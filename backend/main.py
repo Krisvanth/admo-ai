@@ -20,19 +20,20 @@ async def lifespan(app: FastAPI):
     # Shutdown: (SQLAlchemy engine closes automatically usually, but we can add cleanup if needed)
 
 from fastapi.middleware.cors import CORSMiddleware
+from config import settings
 
-app = FastAPI(title="Admo AI API", lifespan=lifespan)
+app = FastAPI(
+    title=settings.APP_NAME,
+    description="School Management Platform API",
+    version="1.0.0",
+    lifespan=lifespan,
+    debug=settings.DEBUG
+)
 
-# CORS Configuration
-origins = [
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:5173",
-]
-
+# CORS Configuration from environment
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=settings.CORS_ORIGINS_LIST,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -40,7 +41,11 @@ app.add_middleware(
 
 @app.get("/")
 async def read_root():
-    return {"message": "Welcome to Admo AI API (PostgreSQL)", "status": "running"}
+    return {
+        "message": f"Welcome to {settings.APP_NAME} API",
+        "status": "running",
+        "environment": settings.APP_ENV
+    }
 
 # --- Authentication ---
 

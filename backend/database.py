@@ -1,27 +1,42 @@
+"""
+Admo AI - Database Module
+
+Handles PostgreSQL connection using async SQLAlchemy.
+Configuration is loaded from config.py (environment variables).
+"""
+
 from sqlmodel import SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
-import os
 
-# PostgreSQL Connection Details
-# In production, these should come from environment variables
-POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
-POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "admo_ai")
+from config import settings
 
-# Connection String
-DATABASE_URL = f"postgresql+asyncpg://{POSTGRES_USER}:{POSTGRES_PASSWORD}@{POSTGRES_HOST}:{POSTGRES_PORT}/{POSTGRES_DB}"
+# Create async engine with settings from config
+engine = create_async_engine(
+    settings.DATABASE_URL,
+    echo=settings.DEBUG,  # Only log SQL in debug mode
+    future=True,
+    pool_pre_ping=True,  # Verify connections before using
+    pool_size=5,  # Connection pool size
+    max_overflow=10  # Max overflow connections
+)
 
-engine = create_async_engine(DATABASE_URL, echo=True, future=True)
 
 async def init_db():
+    """Initialize database tables."""
     async with engine.begin() as conn:
-        # await conn.run_sync(SQLModel.metadata.drop_all) # For development only
+        # await conn.run_sync(SQLModel.metadata.drop_all)  # For development only
         await conn.run_sync(SQLModel.metadata.create_all)
 
+
 async def get_session() -> AsyncSession:
+    """
+    Dependency to get async database session.
+    
+    Usage in FastAPI:
+        async def my_endpoint(session: AsyncSession = Depends(get_session)):
+            ...
+    """
     async_session = sessionmaker(
         engine, class_=AsyncSession, expire_on_commit=False
     )

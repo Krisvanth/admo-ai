@@ -1,3 +1,10 @@
+"""
+Admo AI - Authentication Utilities
+
+Handles password hashing, JWT token generation/verification.
+Configuration is loaded from config.py (environment variables).
+"""
+
 from passlib.context import CryptContext
 from datetime import datetime, timedelta
 from jose import JWTError, jwt
@@ -5,13 +12,12 @@ from typing import Optional
 from fastapi import HTTPException, Depends, status
 from fastapi.security import OAuth2PasswordBearer
 
-# Configuration
-# In production, these should be in .env
-SECRET_KEY = "your-secret-key-keep-it-secret"
-ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 30
+from config import settings
 
+# Password hashing context using Argon2
 pwd_context = CryptContext(schemes=["argon2"], deprecated="auto")
+
+# OAuth2 scheme for token extraction from Authorization header
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 class TokenData:
@@ -29,7 +35,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         email: str = payload.get("sub")
         user_id: int = payload.get("user_id")
         role: str = payload.get("role")
@@ -60,12 +66,13 @@ def get_password_hash(password):
     return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    """Create a JWT access token."""
     to_encode = data.copy()
     if expires_delta:
         expire = datetime.utcnow() + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(minutes=15)
+        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     
     to_encode.update({"exp": expire})
-    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
