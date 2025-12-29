@@ -6,10 +6,10 @@ from models import (
     Communication, AIResource, ParentQuery, UserCreate, UserLogin, Token, SchoolCreate,
     LeaveRequest, LeaveStatus, LeaveRequestRead
 )
-from auth_utils import get_password_hash, verify_password, create_access_token
-from typing import List
+from auth_utils import get_password_hash, verify_password, create_access_token, get_current_user, require_role, TokenData
+from typing import List, Optional
 from datetime import datetime
-from sqlmodel import select
+from sqlmodel import select, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 @asynccontextmanager
@@ -252,21 +252,75 @@ async def list_schools(session: AsyncSession = Depends(get_session)):
     return result.scalars().all()
 
 # --- Leave Requests ---
+
+# Pydantic model for creating leave (separate from DB model)
+from pydantic import BaseModel, Field as PydanticField
+
+class LeaveCreate(BaseModel):
+    start_date: str  # Accept as string, convert in endpoint
+    end_date: str
+    reason: str
+    hours: Optional[int] = PydanticField(default=None, ge=1, le=24)  # Validate 1-24
+    teacher_comment: Optional[str] = None
+
 @app.post("/leaves/", response_model=LeaveRequest)
-async def create_leave_request(leave: LeaveRequest, session: AsyncSession = Depends(get_session)):
-    # Manual conversion of date fields if they are strings (fix for asyncpg error)
-    if isinstance(leave.start_date, str):
-        leave.start_date = datetime.strptime(leave.start_date, "%Y-%m-%d").date()
-    if isinstance(leave.end_date, str):
-        leave.end_date = datetime.strptime(leave.end_date, "%Y-%m-%d").date()
+async def create_leave_request(
+    leave_data: LeaveCreate, 
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)  # Require authentication
+):
+    """Create a new leave request. Teachers can only create requests for themselves."""
+    
+    # Convert date strings to date objects
+    try:
+        start_date = datetime.strptime(leave_data.start_date, "%Y-%m-%d").date()
+        end_date = datetime.strptime(leave_data.end_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
     
     # Validate dates
     today = datetime.now().date()
-    if leave.start_date < today:
+    if start_date < today:
         raise HTTPException(status_code=400, detail="Start date cannot be in the past")
-    if leave.end_date < leave.start_date:
+    if end_date < start_date:
         raise HTTPException(status_code=400, detail="End date cannot be before start date")
-        
+    
+    # Check for overlapping leave requests for the same teacher
+    overlap_statement = select(LeaveRequest).where(
+        and_(
+            LeaveRequest.teacher_id == current_user.user_id,
+            LeaveRequest.status.in_([LeaveStatus.Pending, LeaveStatus.Approved]),
+            or_(
+                # New leave starts during existing leave
+                and_(LeaveRequest.start_date <= start_date, LeaveRequest.end_date >= start_date),
+                # New leave ends during existing leave
+                and_(LeaveRequest.start_date <= end_date, LeaveRequest.end_date >= end_date),
+                # New leave completely contains existing leave
+                and_(start_date <= LeaveRequest.start_date, end_date >= LeaveRequest.end_date)
+            )
+        )
+    )
+    result = await session.execute(overlap_statement)
+    overlapping = result.scalars().first()
+    
+    if overlapping:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Overlapping leave request exists from {overlapping.start_date} to {overlapping.end_date}"
+        )
+    
+    # Create leave with authenticated user's info (can only create for self)
+    leave = LeaveRequest(
+        school_id=current_user.school_id,
+        teacher_id=current_user.user_id,  # Always use current user's ID
+        start_date=start_date,
+        end_date=end_date,
+        reason=leave_data.reason,
+        hours=leave_data.hours,
+        teacher_comment=leave_data.teacher_comment,
+        status=LeaveStatus.Pending
+    )
+    
     session.add(leave)
     await session.commit()
     await session.refresh(leave)
@@ -274,18 +328,37 @@ async def create_leave_request(leave: LeaveRequest, session: AsyncSession = Depe
 
 @app.get("/leaves/", response_model=List[LeaveRequestRead])
 async def list_leaves(
-    school_id: int, 
-    teacher_id: int = None, 
-    session: AsyncSession = Depends(get_session)
+    teacher_id: Optional[int] = None, 
+    status_filter: Optional[LeaveStatus] = None,
+    limit: int = 50,  # Pagination
+    offset: int = 0,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)  # Require authentication
 ):
-    # Join with User to get teacher name
-    statement = select(LeaveRequest, User.name).join(User, LeaveRequest.teacher_id == User.id).where(LeaveRequest.school_id == school_id)
+    """
+    List leave requests. 
+    - Principals see all leaves for their school
+    - Teachers see only their own leaves
+    """
+    # Build base query with school_id from current user
+    statement = select(LeaveRequest, User.name).join(
+        User, LeaveRequest.teacher_id == User.id
+    ).where(LeaveRequest.school_id == current_user.school_id)
     
-    if teacher_id:
+    # Role-based filtering
+    if current_user.role == "teacher":
+        # Teachers can only see their own leaves
+        statement = statement.where(LeaveRequest.teacher_id == current_user.user_id)
+    elif teacher_id:
+        # Principals can filter by specific teacher
         statement = statement.where(LeaveRequest.teacher_id == teacher_id)
     
-    # Order by created_at desc
-    statement = statement.order_by(LeaveRequest.created_at.desc())
+    # Optional status filter
+    if status_filter:
+        statement = statement.where(LeaveRequest.status == status_filter)
+    
+    # Order by created_at desc and apply pagination
+    statement = statement.order_by(LeaveRequest.created_at.desc()).offset(offset).limit(limit)
     
     result = await session.execute(statement)
     rows = result.all()
@@ -304,14 +377,49 @@ async def list_leaves(
 async def update_leave_status(
     leave_id: int, 
     status: LeaveStatus, 
-    comment: str = None, 
-    session: AsyncSession = Depends(get_session)
+    comment: Optional[str] = None, 
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)  # Require authentication
 ):
+    """
+    Update leave status.
+    - Principals can approve/reject any leave in their school
+    - Teachers can only cancel their own pending/approved leaves
+    """
     leave = await session.get(LeaveRequest, leave_id)
     if not leave:
         raise HTTPException(status_code=404, detail="Leave request not found")
     
-    # Ensure we use the enum member, not just the string value
+    # Verify same school
+    if leave.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="Access denied. Leave belongs to different school")
+    
+    # Authorization logic
+    if current_user.role == "teacher":
+        # Teachers can only cancel their own leaves
+        if leave.teacher_id != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Access denied. You can only modify your own leaves")
+        
+        if status != LeaveStatus.Cancelled:
+            raise HTTPException(status_code=403, detail="Teachers can only cancel leaves, not approve/reject")
+        
+        if leave.status not in [LeaveStatus.Pending, LeaveStatus.Approved]:
+            raise HTTPException(status_code=400, detail="Can only cancel pending or approved leaves")
+    
+    elif current_user.role == "principal":
+        # Principals can approve/reject/cancel
+        # Validate status transitions
+        if leave.status == LeaveStatus.Cancelled:
+            raise HTTPException(status_code=400, detail="Cannot modify a cancelled leave")
+        
+        if leave.status == LeaveStatus.Rejected and status == LeaveStatus.Approved:
+            # Allow re-approval of rejected leaves (principal might reconsider)
+            pass
+    else:
+        # Admin or other roles - allow all for now
+        pass
+    
+    # Update status
     leave.status = status
     if comment:
         leave.admin_comment = comment
@@ -320,3 +428,23 @@ async def update_leave_status(
     await session.commit()
     await session.refresh(leave)
     return leave
+
+@app.delete("/leaves/{leave_id}")
+async def delete_leave_request(
+    leave_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(require_role("principal", "admin"))  # Only principal/admin
+):
+    """Delete a leave request. Only principals and admins can delete."""
+    leave = await session.get(LeaveRequest, leave_id)
+    if not leave:
+        raise HTTPException(status_code=404, detail="Leave request not found")
+    
+    # Verify same school
+    if leave.school_id != current_user.school_id:
+        raise HTTPException(status_code=403, detail="Access denied. Leave belongs to different school")
+    
+    await session.delete(leave)
+    await session.commit()
+    return {"message": "Leave request deleted successfully"}
+

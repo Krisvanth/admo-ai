@@ -42,23 +42,38 @@ export const authService = {
 
 export const leaveService = {
     createLeave: async (leaveData) => {
-        const response = await api.post('/leaves/', leaveData);
+        // Backend now uses JWT to get school_id and teacher_id
+        const response = await api.post('/leaves/', {
+            start_date: leaveData.start_date,
+            end_date: leaveData.end_date,
+            reason: leaveData.reason,
+            hours: leaveData.hours || null,
+            teacher_comment: leaveData.teacher_comment || null
+        });
         return response.data;
     },
-    getLeaves: async (schoolId, teacherId = null) => {
-        let url = `/leaves/?school_id=${schoolId}`;
+    getLeaves: async (teacherId = null, statusFilter = null, limit = 50, offset = 0) => {
+        // Backend now uses JWT to get school_id
+        let url = `/leaves/?limit=${limit}&offset=${offset}`;
         if (teacherId) {
             url += `&teacher_id=${teacherId}`;
+        }
+        if (statusFilter) {
+            url += `&status_filter=${statusFilter}`;
         }
         const response = await api.get(url);
         return response.data;
     },
-    updateLeaveStatus: async (leaveId, status, comment) => {
+    updateLeaveStatus: async (leaveId, status, comment = null) => {
         let url = `/leaves/${leaveId}?status=${status}`;
         if (comment) {
             url += `&comment=${encodeURIComponent(comment)}`;
         }
         const response = await api.put(url);
+        return response.data;
+    },
+    deleteLeave: async (leaveId) => {
+        const response = await api.delete(`/leaves/${leaveId}`);
         return response.data;
     }
 };
