@@ -1,6 +1,6 @@
 # Admo AI - Future Enhancements Tracker
 
-> Last Updated: 2025-12-29
+> Last Updated: 2025-12-30
 
 This document tracks planned enhancements and improvements for each module of the Admo AI platform. Use this as a reference for future development sprints.
 
@@ -67,15 +67,31 @@ This document tracks planned enhancements and improvements for each module of th
 
 ## 📅 Timetable Module
 
-**Status:** 🔲 Basic UI Only
+**Status:** ✅ Core Complete
+
+### Completed Features
+- ✅ Weekly timetable grid view with periods
+- ✅ Inline edit mode for Principal (click-to-edit slots)
+- ✅ "My View" toggle for teachers to see their schedule
+- ✅ Leave management with approval workflow
+- ✅ School Management page (Classes & Subjects CRUD)
+- ✅ Teacher assignment to subjects
+- ✅ Role-based access control
 
 | Enhancement | Priority | Description |
 |-------------|----------|-------------|
-| CRUD for Timetable | High | Create, edit, delete timetable entries |
-| Conflict Detection | High | Warn if teacher is double-booked |
-| Teacher View | Medium | Show teacher their personal schedule |
-| Period Swap | Medium | Easy way to swap periods between days |
-| Printable Timetable | Low | PDF export of timetable |
+| Conflict Detection | High | Warn if teacher is double-booked across classes |
+| Drag & Drop | High | Drag periods to swap or reassign slots |
+| Auto-Timetable Generation | High | AI-powered timetable generation based on constraints |
+| Period Templates | Medium | Save and reuse period configurations |
+| Substitution Management | Medium | Assign substitute teachers when someone is on leave |
+| Break/Lunch Configuration | Medium | Configurable break and lunch periods |
+| Multi-Week View | Medium | View/manage timetables for different weeks |
+| Copy Timetable | Medium | Copy timetable from one class to another |
+| Printable Timetable | Low | PDF export of class/teacher timetable |
+| Room/Lab Assignment | Low | Assign rooms/labs to periods, detect conflicts |
+| Period Reminders | Low | Push notifications for upcoming periods |
+| Timetable History | Low | Track changes and allow rollback |
 
 ---
 
