@@ -1,27 +1,10 @@
 import React, { useState } from 'react';
-import { School, MessageSquare, Users, Bell, Globe, Save, Calendar, Plus, Trash2 } from 'lucide-react';
+import { School, MessageSquare, Users, Bell, Globe, Save } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 
 const Settings = () => {
     const { user } = useAuth();
-    const isTeacher = user?.role === 'teacher';
-
-    // Mock state for teacher's schedule
-    const [schedule, setSchedule] = useState([
-        { id: 1, day: 'Monday', period: '1', className: 'Class 10-A', subject: 'Mathematics' },
-        { id: 2, day: 'Monday', period: '2', className: 'Class 9-B', subject: 'Mathematics' },
-        { id: 3, day: 'Tuesday', period: '3', className: 'Class 8-C', subject: 'Math Lab' },
-    ]);
-
-    const [newSlot, setNewSlot] = useState({ day: 'Monday', period: '1', className: 'Class 10-A', subject: 'Mathematics' });
-
-    const handleAddSlot = () => {
-        setSchedule([...schedule, { ...newSlot, id: Date.now() }]);
-    };
-
-    const handleDeleteSlot = (id) => {
-        setSchedule(schedule.filter(s => s.id !== id));
-    };
+    const isTeacher = user?.role === 'TEACHER';
 
     return (
         <div className="space-y-8 max-w-4xl mx-auto pb-12">
@@ -31,102 +14,6 @@ const Settings = () => {
             </div>
 
             <div className="space-y-6">
-                {/* Teacher Specific: My Schedule */}
-                {isTeacher && (
-                    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm">
-                        <h2 className="font-bold text-slate-900 dark:text-white mb-6 flex items-center gap-2">
-                            <Calendar size={20} className="text-primary-500" />
-                            My Class Schedule
-                        </h2>
-                        <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">Add your weekly class schedule here. This will be reflected in the main timetable.</p>
-
-                        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-4 items-end">
-                            <div>
-                                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Day</label>
-                                <select
-                                    className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white"
-                                    value={newSlot.day}
-                                    onChange={(e) => setNewSlot({ ...newSlot, day: e.target.value })}
-                                >
-                                    {['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(d => <option key={d} className="dark:bg-slate-900">{d}</option>)}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Period</label>
-                                <select
-                                    className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white"
-                                    value={newSlot.period}
-                                    onChange={(e) => setNewSlot({ ...newSlot, period: e.target.value })}
-                                >
-                                    {[1, 2, 3, 4, 5, 6, 7, 8].map(p => <option key={p} className="dark:bg-slate-900">{p}</option>)}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Class</label>
-                                <select
-                                    className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white"
-                                    value={newSlot.className}
-                                    onChange={(e) => setNewSlot({ ...newSlot, className: e.target.value })}
-                                >
-                                    {['Class 10-A', 'Class 10-B', 'Class 9-A', 'Class 9-B', 'Class 8-A', 'Class 8-B'].map(c => <option key={c} className="dark:bg-slate-900">{c}</option>)}
-                                </select>
-                            </div>
-                            <div>
-                                <label className="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Subject</label>
-                                <input
-                                    type="text"
-                                    className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-sm outline-none text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-600"
-                                    value={newSlot.subject}
-                                    onChange={(e) => setNewSlot({ ...newSlot, subject: e.target.value })}
-                                />
-                            </div>
-                            <button
-                                onClick={handleAddSlot}
-                                className="bg-primary-600 hover:bg-primary-700 text-white p-2 rounded-lg flex items-center justify-center transition-colors"
-                            >
-                                <Plus size={20} />
-                            </button>
-                        </div>
-
-                        <div className="border border-slate-100 dark:border-slate-700 rounded-xl overflow-hidden">
-                            <table className="w-full text-sm text-left">
-                                <thead className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400 font-medium">
-                                    <tr>
-                                        <th className="px-4 py-3">Day</th>
-                                        <th className="px-4 py-3">Period</th>
-                                        <th className="px-4 py-3">Class</th>
-                                        <th className="px-4 py-3">Subject</th>
-                                        <th className="px-4 py-3 text-right">Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                                    {schedule.map((slot) => (
-                                        <tr key={slot.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                                            <td className="px-4 py-3 font-medium text-slate-900 dark:text-white">{slot.day}</td>
-                                            <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{slot.period}</td>
-                                            <td className="px-4 py-3 text-slate-900 dark:text-white">{slot.className}</td>
-                                            <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{slot.subject}</td>
-                                            <td className="px-4 py-3 text-right">
-                                                <button
-                                                    onClick={() => handleDeleteSlot(slot.id)}
-                                                    className="text-slate-400 dark:text-slate-500 hover:text-red-500 dark:hover:text-red-400 transition-colors"
-                                                >
-                                                    <Trash2 size={16} />
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                            {schedule.length === 0 && (
-                                <div className="p-8 text-center text-slate-400 dark:text-slate-500 text-sm">
-                                    No schedule added yet. Add your periods above.
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                )}
-
                 {/* School Profile (Only for Principal) */}
                 {!isTeacher && (
                     <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm">

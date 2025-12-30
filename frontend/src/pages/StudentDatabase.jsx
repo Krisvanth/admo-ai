@@ -4,7 +4,7 @@ import { useAuth } from '@/context/AuthContext';
 
 const StudentDatabase = () => {
     const { user } = useAuth();
-    const isPrincipal = user?.role === 'principal';
+    const isPrincipal = user?.role === 'PRINCIPAL';
 
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedClass, setSelectedClass] = useState('All');

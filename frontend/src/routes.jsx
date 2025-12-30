@@ -7,6 +7,7 @@ import Attendance from '@/pages/Attendance';
 import FeeReminders from '@/pages/FeeReminders';
 import Communication from '@/pages/Communication';
 import Timetable from '@/pages/Timetable';
+import SchoolManagement from '@/pages/SchoolManagement';
 import ExamAssessment from '@/pages/ExamAssessment';
 import TeacherAssistant from '@/pages/TeacherAssistant';
 import ParentQueryBot from '@/pages/ParentQueryBot';
@@ -27,6 +28,7 @@ const AppRoutes = () => {
                 { path: 'fees', element: <FeeReminders /> },
                 { path: 'communication', element: <Communication /> },
                 { path: 'timetable', element: <Timetable /> },
+                { path: 'school', element: <SchoolManagement /> },
                 { path: 'exams', element: <ExamAssessment /> },
                 { path: 'teacher-assistant', element: <TeacherAssistant /> },
                 { path: 'parent-bot', element: <ParentQueryBot /> },

@@ -6,9 +6,9 @@ from pydantic import EmailStr
 
 # --- Enums ---
 class UserRole(str, Enum):
-    PRINCIPAL = "principal"
-    TEACHER = "teacher"
-    ADMIN = "admin"
+    PRINCIPAL = "PRINCIPAL"
+    TEACHER = "TEACHER"
+    ADMIN = "ADMIN"
 
 class FeeStatus(str, Enum):
     PAID = "Paid"
@@ -39,6 +39,42 @@ class LeaveStatus(str, Enum):
     Approved = "Approved"
     Rejected = "Rejected"
     Cancelled = "Cancelled"
+
+class PeriodType(str, Enum):
+    REGULAR = "regular"
+    BREAK = "break"
+    LUNCH = "lunch"
+    ASSEMBLY = "assembly"
+
+# --- Timetable Configuration Models (Pydantic only, stored in School.settings) ---
+class TimeSlot(SQLModel):
+    """Individual time slot configuration"""
+    slot_number: int
+    name: str  # e.g., "Period 1", "Break", "Lunch"
+    start_time: str  # "09:00"
+    end_time: str  # "09:45"
+    period_type: PeriodType = PeriodType.REGULAR
+
+class TimetableConfig(SQLModel):
+    """Complete timetable configuration for a school"""
+    working_days: List[str] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    time_slots: List[TimeSlot] = []
+
+# Default timetable configuration
+DEFAULT_TIMETABLE_CONFIG = {
+    "working_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+    "time_slots": [
+        {"slot_number": 1, "name": "Period 1", "start_time": "09:00", "end_time": "09:45", "period_type": "regular"},
+        {"slot_number": 2, "name": "Period 2", "start_time": "09:45", "end_time": "10:30", "period_type": "regular"},
+        {"slot_number": 3, "name": "Period 3", "start_time": "10:30", "end_time": "11:15", "period_type": "regular"},
+        {"slot_number": 4, "name": "Break", "start_time": "11:15", "end_time": "11:30", "period_type": "break"},
+        {"slot_number": 5, "name": "Period 4", "start_time": "11:30", "end_time": "12:15", "period_type": "regular"},
+        {"slot_number": 6, "name": "Period 5", "start_time": "12:15", "end_time": "13:00", "period_type": "regular"},
+        {"slot_number": 7, "name": "Lunch", "start_time": "13:00", "end_time": "13:45", "period_type": "lunch"},
+        {"slot_number": 8, "name": "Period 6", "start_time": "13:45", "end_time": "14:30", "period_type": "regular"},
+        {"slot_number": 9, "name": "Period 7", "start_time": "14:30", "end_time": "15:15", "period_type": "regular"},
+    ]
+}
 
 # --- Core Models ---
 
@@ -105,6 +141,37 @@ class Class(SQLModel, table=True):
     grade: str
     section: str
     class_teacher_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class ClassCreate(SQLModel):
+    grade: str
+    section: str
+    class_teacher_id: Optional[int] = None
+
+class ClassRead(SQLModel):
+    id: int
+    grade: str
+    section: str
+    class_teacher_id: Optional[int]
+    class_teacher_name: Optional[str] = None
+    created_at: datetime
+
+class Subject(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    school_id: int = Field(foreign_key="school.id")
+    name: str
+    code: Optional[str] = None  # e.g., "MATH101"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class SubjectCreate(SQLModel):
+    name: str
+    code: Optional[str] = None
+
+class SubjectRead(SQLModel):
+    id: int
+    name: str
+    code: Optional[str]
+    created_at: datetime
     
 class Attendance(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -139,6 +206,40 @@ class Timetable(SQLModel, table=True):
     section: str
     day: str # Monday, Tuesday, etc.
     periods: List[dict] = Field(sa_column=Column(JSON)) # Storing list of TimetablePeriod as JSON
+
+# Timetable Entry - individual period assignment
+class TimetableEntry(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    school_id: int = Field(foreign_key="school.id")
+    class_id: int = Field(foreign_key="class.id")
+    day: str  # Monday, Tuesday, etc.
+    slot_number: int  # Period number (matches TimeSlot.slot_number)
+    subject_id: Optional[int] = Field(default=None, foreign_key="subject.id")
+    teacher_id: Optional[int] = Field(default=None, foreign_key="user.id")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+class TimetableEntryCreate(SQLModel):
+    class_id: int
+    day: str
+    slot_number: int
+    subject_id: Optional[int] = None
+    teacher_id: Optional[int] = None
+
+class TimetableEntryRead(SQLModel):
+    id: int
+    class_id: int
+    class_name: Optional[str] = None  # For teacher view
+    day: str
+    slot_number: int
+    subject_id: Optional[int]
+    subject_name: Optional[str] = None
+    teacher_id: Optional[int]
+    teacher_name: Optional[str] = None
+
+class TimetableBulkUpdate(SQLModel):
+    """For updating multiple entries at once"""
+    entries: List[TimetableEntryCreate]
 
 class Exam(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
