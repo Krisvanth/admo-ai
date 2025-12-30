@@ -50,11 +50,19 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> TokenData:
 
 def require_role(*allowed_roles):
     """Dependency factory to require specific roles."""
+    # Flatten the roles in case a list is passed instead of individual args
+    flattened_roles = []
+    for role in allowed_roles:
+        if isinstance(role, list):
+            flattened_roles.extend(role)
+        else:
+            flattened_roles.append(role)
+    
     async def role_checker(current_user: TokenData = Depends(get_current_user)) -> TokenData:
-        if current_user.role not in allowed_roles:
+        if current_user.role not in flattened_roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Access denied. Required roles: {', '.join(allowed_roles)}"
+                detail=f"Access denied. Required roles: {', '.join(flattened_roles)}"
             )
         return current_user
     return role_checker

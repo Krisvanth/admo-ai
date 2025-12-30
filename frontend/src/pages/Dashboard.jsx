@@ -5,7 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 
 const Dashboard = () => {
     const { user } = useAuth();
-    const isPrincipal = user?.role === 'principal';
+    const isPrincipal = user?.role === 'PRINCIPAL';
 
     if (!isPrincipal) {
         return (

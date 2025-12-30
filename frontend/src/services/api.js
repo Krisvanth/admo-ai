@@ -78,4 +78,128 @@ export const leaveService = {
     }
 };
 
+// Timetable Configuration Service
+export const timetableConfigService = {
+    // Get current timetable configuration
+    getConfig: async () => {
+        const response = await api.get('/timetable-config/');
+        return response.data;
+    },
+
+    // Update timetable configuration (working days and/or time slots)
+    updateConfig: async (config) => {
+        const response = await api.put('/timetable-config/', config);
+        return response.data;
+    },
+
+    // Add a new time slot
+    addTimeSlot: async (slot) => {
+        const response = await api.post('/timetable-config/add-slot/', slot);
+        return response.data;
+    },
+
+    // Update a specific time slot
+    updateTimeSlot: async (slotNumber, slotData) => {
+        const response = await api.put(`/timetable-config/slot/${slotNumber}`, slotData);
+        return response.data;
+    },
+
+    // Delete a time slot
+    deleteTimeSlot: async (slotNumber) => {
+        const response = await api.delete(`/timetable-config/slot/${slotNumber}`);
+        return response.data;
+    },
+
+    // Reset to default configuration
+    resetConfig: async () => {
+        const response = await api.post('/timetable-config/reset/');
+        return response.data;
+    }
+};
+
+// Classes Service
+export const classService = {
+    getClasses: async () => {
+        const response = await api.get('/classes/');
+        return response.data;
+    },
+    createClass: async (classData) => {
+        const response = await api.post('/classes/', classData);
+        return response.data;
+    },
+    updateClass: async (classId, classData) => {
+        const response = await api.put(`/classes/${classId}`, classData);
+        return response.data;
+    },
+    deleteClass: async (classId) => {
+        const response = await api.delete(`/classes/${classId}`);
+        return response.data;
+    }
+};
+
+// Subjects Service
+export const subjectService = {
+    getSubjects: async () => {
+        const response = await api.get('/subjects/');
+        return response.data;
+    },
+    createSubject: async (subjectData) => {
+        const response = await api.post('/subjects/', subjectData);
+        return response.data;
+    },
+    updateSubject: async (subjectId, subjectData) => {
+        const response = await api.put(`/subjects/${subjectId}`, subjectData);
+        return response.data;
+    },
+    deleteSubject: async (subjectId) => {
+        const response = await api.delete(`/subjects/${subjectId}`);
+        return response.data;
+    }
+};
+
+// Teachers Service
+export const teacherService = {
+    getTeachers: async () => {
+        const response = await api.get('/teachers/');
+        return response.data;
+    }
+};
+
+// Timetable Entries Service (Period assignments for classes)
+export const timetableEntryService = {
+    // Get all timetable entries for a specific class
+    getEntries: async (classId) => {
+        const response = await api.get(`/timetable-entries/?class_id=${classId}`);
+        return response.data;
+    },
+    
+    // Get all timetable entries for a teacher (for My View)
+    getTeacherEntries: async (teacherId = null) => {
+        let url = '/timetable-entries/teacher/';
+        if (teacherId) {
+            url += `?teacher_id=${teacherId}`;
+        }
+        const response = await api.get(url);
+        return response.data;
+    },
+    
+    // Create or update a single timetable entry
+    createOrUpdateEntry: async (entryData) => {
+        const response = await api.post('/timetable-entries/', entryData);
+        return response.data;
+    },
+    
+    // Bulk update timetable entries
+    bulkUpdate: async (entries) => {
+        const response = await api.put('/timetable-entries/bulk', { entries });
+        return response.data;
+    },
+    
+    // Delete a timetable entry
+    deleteEntry: async (entryId) => {
+        const response = await api.delete(`/timetable-entries/${entryId}`);
+        return response.data;
+    }
+};
+
 export default api;

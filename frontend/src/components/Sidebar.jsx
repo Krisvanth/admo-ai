@@ -14,7 +14,8 @@ import {
     Bot,
     Users,
     Moon,
-    Sun
+    Sun,
+    School
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useAuth } from '@/context/AuthContext';
@@ -30,19 +31,20 @@ const Sidebar = () => {
     };
 
     const allNavItems = [
-        { icon: LayoutDashboard, label: 'Dashboard', path: '/', roles: ['principal', 'teacher'] },
-        { icon: UserCheck, label: 'Attendance Agent', path: '/attendance', roles: ['principal', 'teacher'] },
-        { icon: CreditCard, label: 'Fee Reminders', path: '/fees', roles: ['principal', 'teacher'] },
-        { icon: MessageSquare, label: 'Communication', path: '/communication', roles: ['principal'] },
-        { icon: CalendarClock, label: 'Timetable & Leave', path: '/timetable', roles: ['principal', 'teacher'] },
-        { icon: GraduationCap, label: 'Exams & Marks', path: '/exams', roles: ['principal', 'teacher'] },
-        { icon: PenTool, label: 'Teacher Assistant', path: '/teacher-assistant', roles: ['principal', 'teacher'] },
-        { icon: Bot, label: 'Parent Query Bot', path: '/parent-bot', roles: ['principal'] },
-        { icon: Users, label: 'Student Database', path: '/students', roles: ['principal', 'teacher'] },
-        { icon: Settings, label: 'Settings', path: '/settings', roles: ['principal', 'teacher'] },
+        { icon: LayoutDashboard, label: 'Dashboard', path: '/', roles: ['PRINCIPAL', 'TEACHER'] },
+        { icon: UserCheck, label: 'Attendance Agent', path: '/attendance', roles: ['PRINCIPAL', 'TEACHER'] },
+        { icon: CreditCard, label: 'Fee Reminders', path: '/fees', roles: ['PRINCIPAL', 'TEACHER'] },
+        { icon: MessageSquare, label: 'Communication', path: '/communication', roles: ['PRINCIPAL'] },
+        { icon: CalendarClock, label: 'Timetable & Leave', path: '/timetable', roles: ['PRINCIPAL', 'TEACHER'] },
+        { icon: School, label: 'School Management', path: '/school', roles: ['PRINCIPAL'] },
+        { icon: GraduationCap, label: 'Exams & Marks', path: '/exams', roles: ['PRINCIPAL', 'TEACHER'] },
+        { icon: PenTool, label: 'Teacher Assistant', path: '/teacher-assistant', roles: ['PRINCIPAL', 'TEACHER'] },
+        { icon: Bot, label: 'Parent Query Bot', path: '/parent-bot', roles: ['PRINCIPAL'] },
+        { icon: Users, label: 'Student Database', path: '/students', roles: ['PRINCIPAL', 'TEACHER'] },
+        { icon: Settings, label: 'Settings', path: '/settings', roles: ['PRINCIPAL', 'TEACHER'] },
     ];
 
-    const navItems = allNavItems.filter(item => item.roles.includes(user?.role || 'principal'));
+    const navItems = allNavItems.filter(item => item.roles.includes(user?.role || 'PRINCIPAL'));
 
     return (
         <aside className="w-64 bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 h-screen flex flex-col fixed left-0 top-0 z-10 transition-all duration-300">

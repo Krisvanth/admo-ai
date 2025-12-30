@@ -5,7 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 const ExamAssessment = () => {
   const [activeTab, setActiveTab] = useState('timetable');
   const { user } = useAuth();
-  const isPrincipal = user?.role === 'principal';
+  const isPrincipal = user?.role === 'PRINCIPAL';
 
   return (
     <div className="space-y-8">

@@ -5,7 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 const FeeReminders = () => {
     const [step, setStep] = useState(1);
     const { user } = useAuth();
-    const isPrincipal = user?.role === 'principal';
+    const isPrincipal = user?.role === 'PRINCIPAL';
 
     return (
         <div className="space-y-8">
