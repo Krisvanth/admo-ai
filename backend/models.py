@@ -46,6 +46,21 @@ class PeriodType(str, Enum):
     LUNCH = "lunch"
     ASSEMBLY = "assembly"
 
+class Gender(str, Enum):
+    MALE = "M"
+    FEMALE = "F"
+    OTHER = "Other"
+
+class BloodGroup(str, Enum):
+    A_POSITIVE = "A+"
+    A_NEGATIVE = "A-"
+    B_POSITIVE = "B+"
+    B_NEGATIVE = "B-"
+    O_POSITIVE = "O+"
+    O_NEGATIVE = "O-"
+    AB_POSITIVE = "AB+"
+    AB_NEGATIVE = "AB-"
+
 # --- Timetable Configuration Models (Pydantic only, stored in School.settings) ---
 class TimeSlot(SQLModel):
     """Individual time slot configuration"""
@@ -126,14 +141,94 @@ class Token(SQLModel):
 class Student(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     school_id: int = Field(foreign_key="school.id")
+    admission_number: str = Field(index=True)  # Unique per school
     name: str
+    date_of_birth: date
+    gender: Gender
+    class_id: int = Field(foreign_key="class.id")  # FK to Class table
     roll_no: str
-    class_name: str = Field(..., alias="class_") # 'class' is reserved
-    section: str
-    parent_name: str
-    parent_phone: str
+    address: Optional[str] = None
+    father_name: str
+    mother_name: Optional[str] = None
+    father_occupation: Optional[str] = None
+    mother_occupation: Optional[str] = None
+    annual_income: Optional[float] = None
+    contact_number: str
     parent_email: Optional[EmailStr] = None
+    blood_group: Optional[BloodGroup] = None
+    date_of_admission: date = Field(default_factory=date.today)
+    is_active: bool = Field(default=True)  # For students who leave mid-year
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+# --- Student Request/Response Models ---
+class StudentCreate(SQLModel):
+    admission_number: str
+    name: str
+    date_of_birth: date
+    gender: Gender
+    class_id: int
+    roll_no: str
+    address: Optional[str] = None
+    father_name: str
+    mother_name: Optional[str] = None
+    father_occupation: Optional[str] = None
+    mother_occupation: Optional[str] = None
+    annual_income: Optional[float] = None
+    contact_number: str
+    parent_email: Optional[EmailStr] = None
+    blood_group: Optional[BloodGroup] = None
+    date_of_admission: Optional[date] = None  # Will default to today if not provided
+
+class StudentUpdate(SQLModel):
+    name: Optional[str] = None
+    date_of_birth: Optional[date] = None
+    gender: Optional[Gender] = None
+    class_id: Optional[int] = None
+    roll_no: Optional[str] = None
+    address: Optional[str] = None
+    father_name: Optional[str] = None
+    mother_name: Optional[str] = None
+    father_occupation: Optional[str] = None
+    mother_occupation: Optional[str] = None
+    annual_income: Optional[float] = None
+    contact_number: Optional[str] = None
+    parent_email: Optional[EmailStr] = None
+    blood_group: Optional[BloodGroup] = None
+    is_active: Optional[bool] = None
+
+class StudentRead(SQLModel):
+    id: int
+    admission_number: str
+    name: str
+    date_of_birth: date
+    gender: Gender
+    class_id: int
+    class_name: Optional[str] = None  # Will be populated: "10-A"
+    roll_no: str
+    address: Optional[str]
+    father_name: str
+    mother_name: Optional[str]
+    father_occupation: Optional[str]
+    mother_occupation: Optional[str]
+    annual_income: Optional[float]
+    contact_number: str
+    parent_email: Optional[EmailStr]
+    blood_group: Optional[BloodGroup]
+    date_of_admission: date
+    is_active: bool
+    created_at: datetime
+
+class StudentBulkCreate(SQLModel):
+    students: List[StudentCreate]
+
+# Paginated response for students
+class StudentPaginatedResponse(SQLModel):
+    items: List[StudentRead]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
 
 class Class(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -154,6 +249,8 @@ class ClassRead(SQLModel):
     section: str
     class_teacher_id: Optional[int]
     class_teacher_name: Optional[str] = None
+    student_count: int = 0  # Number of students in this class
+    can_edit: bool = True  # Whether current user can add/edit students in this class
     created_at: datetime
 
 class Subject(SQLModel, table=True):

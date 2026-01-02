@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, UploadFile, File
+from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
 from database import init_db, get_session
 from models import (
@@ -7,13 +8,18 @@ from models import (
     LeaveRequest, LeaveStatus, LeaveRequestRead,
     TimeSlot, TimetableConfig, PeriodType, DEFAULT_TIMETABLE_CONFIG,
     ClassCreate, ClassRead, Subject, SubjectCreate, SubjectRead,
-    TimetableEntry, TimetableEntryCreate, TimetableEntryRead, TimetableBulkUpdate
+    TimetableEntry, TimetableEntryCreate, TimetableEntryRead, TimetableBulkUpdate,
+    StudentCreate, StudentUpdate, StudentRead, StudentBulkCreate, StudentPaginatedResponse, Gender, BloodGroup
 )
 from auth_utils import get_password_hash, verify_password, create_access_token, get_current_user, require_role, TokenData
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, date
 from sqlmodel import select, and_, or_, SQLModel
 from sqlalchemy.ext.asyncio import AsyncSession
+import csv
+import io
+import tempfile
+import os
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -108,18 +114,571 @@ async def list_users(session: AsyncSession = Depends(get_session)):
     return result.scalars().all()
 
 # --- Students ---
-@app.post("/students/", response_model=Student)
-async def create_student(student: Student, session: AsyncSession = Depends(get_session)):
+
+# Helper function to parse dates in multiple formats
+def parse_date_flexible(date_str: str) -> date:
+    """
+    Parse a date string in various formats.
+    Supports: YYYY-MM-DD, DD-MM-YYYY, MM/DD/YYYY, DD/MM/YYYY, etc.
+    """
+    if not date_str:
+        return None
+    
+    date_str = date_str.strip()
+    
+    # List of common date formats to try
+    formats = [
+        '%Y-%m-%d',      # 2010-05-15
+        '%d-%m-%Y',      # 15-05-2010
+        '%m/%d/%Y',      # 05/15/2010 (US format)
+        '%d/%m/%Y',      # 15/05/2010 (UK/Indian format)
+        '%Y/%m/%d',      # 2010/05/15
+        '%d.%m.%Y',      # 15.05.2010
+        '%m-%d-%Y',      # 05-15-2010
+        '%d %b %Y',      # 15 May 2010
+        '%d %B %Y',      # 15 May 2010
+        '%b %d, %Y',     # May 15, 2010
+        '%B %d, %Y',     # May 15, 2010
+    ]
+    
+    for fmt in formats:
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    
+    # If no format matches, raise error with helpful message
+    raise ValueError(f"Could not parse date '{date_str}'. Supported formats: YYYY-MM-DD, DD-MM-YYYY, MM/DD/YYYY, DD/MM/YYYY")
+
+# Helper function to check if teacher has access to a class
+async def check_teacher_class_access(user: TokenData, class_id: int, session: AsyncSession) -> bool:
+    """Check if a teacher has access to a specific class"""
+    if user.role == "PRINCIPAL":
+        return True
+    
+    # Get teacher's assigned classes
+    statement = select(User).where(User.id == user.user_id)
+    result = await session.execute(statement)
+    teacher = result.scalars().first()
+    
+    if not teacher or not teacher.assigned_classes:
+        return False
+    
+    # assigned_classes contains class IDs as strings
+    return str(class_id) in teacher.assigned_classes
+
+# Helper to build StudentRead with class_name
+async def build_student_read(student: Student, session: AsyncSession) -> StudentRead:
+    """Convert Student to StudentRead with class_name populated"""
+    # Get class info
+    class_statement = select(Class).where(Class.id == student.class_id)
+    class_result = await session.execute(class_statement)
+    class_obj = class_result.scalars().first()
+    class_name = f"{class_obj.grade}-{class_obj.section}" if class_obj else None
+    
+    return StudentRead(
+        id=student.id,
+        admission_number=student.admission_number,
+        name=student.name,
+        date_of_birth=student.date_of_birth,
+        gender=student.gender,
+        class_id=student.class_id,
+        class_name=class_name,
+        roll_no=student.roll_no,
+        address=student.address,
+        father_name=student.father_name,
+        mother_name=student.mother_name,
+        father_occupation=student.father_occupation,
+        mother_occupation=student.mother_occupation,
+        annual_income=student.annual_income,
+        contact_number=student.contact_number,
+        parent_email=student.parent_email,
+        blood_group=student.blood_group,
+        date_of_admission=student.date_of_admission,
+        is_active=student.is_active,
+        created_at=student.created_at
+    )
+
+@app.post("/students/", response_model=StudentRead)
+async def create_student(
+    student_data: StudentCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Create a new student. Principal can create for any class, Teacher only for assigned classes."""
+    # Check class access for teachers
+    if current_user.role == "TEACHER":
+        has_access = await check_teacher_class_access(current_user, student_data.class_id, session)
+        if not has_access:
+            raise HTTPException(status_code=403, detail="You don't have access to this class")
+    
+    # Check if admission number already exists in this school
+    statement = select(Student).where(
+        and_(
+            Student.school_id == current_user.school_id,
+            Student.admission_number == student_data.admission_number
+        )
+    )
+    result = await session.execute(statement)
+    if result.scalars().first():
+        raise HTTPException(status_code=400, detail="Admission number already exists in this school")
+    
+    # Check if roll number already exists in this class
+    statement = select(Student).where(
+        and_(
+            Student.school_id == current_user.school_id,
+            Student.class_id == student_data.class_id,
+            Student.roll_no == student_data.roll_no
+        )
+    )
+    result = await session.execute(statement)
+    if result.scalars().first():
+        raise HTTPException(status_code=400, detail="Roll number already exists in this class")
+    
+    # Create student
+    student = Student(
+        school_id=current_user.school_id,
+        admission_number=student_data.admission_number,
+        name=student_data.name,
+        date_of_birth=student_data.date_of_birth,
+        gender=student_data.gender,
+        class_id=student_data.class_id,
+        roll_no=student_data.roll_no,
+        address=student_data.address,
+        father_name=student_data.father_name,
+        mother_name=student_data.mother_name,
+        father_occupation=student_data.father_occupation,
+        mother_occupation=student_data.mother_occupation,
+        annual_income=student_data.annual_income,
+        contact_number=student_data.contact_number,
+        parent_email=student_data.parent_email,
+        blood_group=student_data.blood_group,
+        date_of_admission=student_data.date_of_admission or date.today()
+    )
+    
     session.add(student)
     await session.commit()
     await session.refresh(student)
-    return student
+    
+    return await build_student_read(student, session)
 
-@app.get("/students/", response_model=List[Student])
-async def list_students(session: AsyncSession = Depends(get_session)):
-    statement = select(Student)
+@app.get("/students/", response_model=StudentPaginatedResponse)
+async def list_students(
+    class_id: Optional[int] = None,
+    is_active: bool = True,
+    search: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    List students with pagination. 
+    - Principal: Can see all students, optionally filtered by class
+    - Teacher: Can see all students (read-only), but can only edit assigned classes
+    """
+    from sqlalchemy import func, or_
+    
+    # Build base query - both Principal and Teacher can view all students
+    conditions = [Student.school_id == current_user.school_id, Student.is_active == is_active]
+    
+    # Filter by class if provided
+    if class_id:
+        conditions.append(Student.class_id == class_id)
+    
+    # Search filter
+    if search:
+        search_term = f"%{search}%"
+        conditions.append(
+            or_(
+                Student.name.ilike(search_term),
+                Student.admission_number.ilike(search_term),
+                Student.roll_no.ilike(search_term),
+                Student.father_name.ilike(search_term)
+            )
+        )
+    
+    # Get total count
+    count_stmt = select(func.count(Student.id)).where(and_(*conditions))
+    total_result = await session.execute(count_stmt)
+    total = total_result.scalar() or 0
+    
+    # Calculate pagination
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    offset = (page - 1) * page_size
+    
+    # Get paginated results
+    statement = select(Student).where(and_(*conditions)).order_by(Student.roll_no).offset(offset).limit(page_size)
     result = await session.execute(statement)
-    return result.scalars().all()
+    students = result.scalars().all()
+    
+    # Build response with class names
+    items = [await build_student_read(s, session) for s in students]
+    
+    return StudentPaginatedResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages
+    )
+
+@app.get("/students/{student_id}", response_model=StudentRead)
+async def get_student(
+    student_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get a single student by ID - All users can view any student"""
+    statement = select(Student).where(
+        and_(Student.id == student_id, Student.school_id == current_user.school_id)
+    )
+    result = await session.execute(statement)
+    student = result.scalars().first()
+    
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Teachers can view any student (no access check for GET)
+    return await build_student_read(student, session)
+
+@app.put("/students/{student_id}", response_model=StudentRead)
+async def update_student(
+    student_id: int,
+    student_data: StudentUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Update a student. Principal can update any, Teacher only their assigned classes."""
+    statement = select(Student).where(
+        and_(Student.id == student_id, Student.school_id == current_user.school_id)
+    )
+    result = await session.execute(statement)
+    student = result.scalars().first()
+    
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    # Check teacher access
+    if current_user.role == "TEACHER":
+        has_access = await check_teacher_class_access(current_user, student.class_id, session)
+        if not has_access:
+            raise HTTPException(status_code=403, detail="You don't have access to this student")
+        
+        # If changing class, check access to new class too
+        if student_data.class_id and student_data.class_id != student.class_id:
+            has_new_access = await check_teacher_class_access(current_user, student_data.class_id, session)
+            if not has_new_access:
+                raise HTTPException(status_code=403, detail="You don't have access to the target class")
+    
+    # Check roll number uniqueness if changing
+    if student_data.roll_no and student_data.roll_no != student.roll_no:
+        target_class = student_data.class_id or student.class_id
+        dup_statement = select(Student).where(
+            and_(
+                Student.school_id == current_user.school_id,
+                Student.class_id == target_class,
+                Student.roll_no == student_data.roll_no,
+                Student.id != student_id
+            )
+        )
+        dup_result = await session.execute(dup_statement)
+        if dup_result.scalars().first():
+            raise HTTPException(status_code=400, detail="Roll number already exists in this class")
+    
+    # Update fields
+    update_data = student_data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(student, key, value)
+    
+    student.updated_at = datetime.utcnow()
+    
+    session.add(student)
+    await session.commit()
+    await session.refresh(student)
+    
+    return await build_student_read(student, session)
+
+@app.delete("/students/{student_id}")
+async def delete_student(
+    student_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(require_role(["PRINCIPAL"]))
+):
+    """Delete a student. Only Principal can delete."""
+    statement = select(Student).where(
+        and_(Student.id == student_id, Student.school_id == current_user.school_id)
+    )
+    result = await session.execute(statement)
+    student = result.scalars().first()
+    
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found")
+    
+    await session.delete(student)
+    await session.commit()
+    
+    return {"message": "Student deleted successfully"}
+
+@app.get("/students/csv-template/")
+async def get_csv_template():
+    """Download CSV template for bulk student upload"""
+    headers = [
+        "admission_number", "name", "date_of_birth", "gender", "class_grade", "class_section",
+        "roll_no", "address", "father_name", "mother_name", "father_occupation",
+        "mother_occupation", "annual_income", "contact_number", "parent_email", "blood_group",
+        "date_of_admission"
+    ]
+    
+    # Create sample row
+    sample = [
+        "ADM001", "John Doe", "2010-05-15", "M", "10", "A", "1", "123 Main St",
+        "Robert Doe", "Jane Doe", "Engineer", "Doctor", "500000", "9876543210",
+        "parent@email.com", "O+", "2023-04-01"
+    ]
+    
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(headers)
+    writer.writerow(sample)
+    
+    from fastapi.responses import StreamingResponse
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=student_template.csv"}
+    )
+
+@app.get("/students/export/")
+async def export_students(
+    class_id: Optional[int] = None,
+    is_active: bool = True,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Export students to CSV file.
+    Can export all students or filter by class.
+    """
+    # Build query
+    conditions = [Student.school_id == current_user.school_id, Student.is_active == is_active]
+    
+    if class_id:
+        conditions.append(Student.class_id == class_id)
+    
+    statement = select(Student).where(and_(*conditions)).order_by(Student.class_id, Student.roll_no)
+    result = await session.execute(statement)
+    students = result.scalars().all()
+    
+    # Get all classes for lookup
+    class_stmt = select(Class).where(Class.school_id == current_user.school_id)
+    class_result = await session.execute(class_stmt)
+    classes = {c.id: f"{c.grade}-{c.section}" for c in class_result.scalars().all()}
+    
+    # Create CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Headers
+    headers = [
+        "Admission Number", "Name", "Date of Birth", "Gender", "Class", "Roll No",
+        "Address", "Father Name", "Mother Name", "Father Occupation", "Mother Occupation",
+        "Annual Income", "Contact Number", "Parent Email", "Blood Group", "Date of Admission", "Status"
+    ]
+    writer.writerow(headers)
+    
+    # Data rows
+    for student in students:
+        gender_display = {"M": "Male", "F": "Female", "Other": "Other"}.get(student.gender.value if student.gender else "", "")
+        blood_group_display = student.blood_group.value if student.blood_group else ""
+        class_name = classes.get(student.class_id, "")
+        
+        row = [
+            student.admission_number,
+            student.name,
+            student.date_of_birth.strftime("%Y-%m-%d") if student.date_of_birth else "",
+            gender_display,
+            class_name,
+            student.roll_no,
+            student.address or "",
+            student.father_name,
+            student.mother_name or "",
+            student.father_occupation or "",
+            student.mother_occupation or "",
+            str(student.annual_income) if student.annual_income else "",
+            student.contact_number or "",
+            student.parent_email or "",
+            blood_group_display,
+            student.date_of_admission.strftime("%Y-%m-%d") if student.date_of_admission else "",
+            "Active" if student.is_active else "Inactive"
+        ]
+        writer.writerow(row)
+    
+    # Generate filename
+    from datetime import datetime as dt
+    timestamp = dt.now().strftime("%Y%m%d_%H%M%S")
+    if class_id and class_id in classes:
+        filename = f"students_{classes[class_id].replace('-', '_')}_{timestamp}.csv"
+    else:
+        filename = f"students_all_{timestamp}.csv"
+    
+    from fastapi.responses import StreamingResponse
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+@app.post("/students/bulk-upload/")
+async def bulk_upload_students(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Bulk upload students from CSV file.
+    Principal can upload to any class, Teacher only to assigned classes.
+    File is processed in memory/temp and deleted after.
+    """
+    if not file.filename.endswith('.csv'):
+        raise HTTPException(status_code=400, detail="Only CSV files are supported")
+    
+    # Get teacher's assigned classes if role is TEACHER
+    assigned_class_ids = []
+    if current_user.role == "TEACHER":
+        user_statement = select(User).where(User.id == current_user.user_id)
+        user_result = await session.execute(user_statement)
+        teacher = user_result.scalars().first()
+        if teacher and teacher.assigned_classes:
+            assigned_class_ids = [int(c) for c in teacher.assigned_classes]
+    
+    # Read file into memory
+    contents = await file.read()
+    
+    # Save to temp file, process, then delete
+    temp_file = None
+    try:
+        # Create temp file
+        temp_file = tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.csv', encoding='utf-8')
+        temp_file.write(contents.decode('utf-8'))
+        temp_file.close()
+        
+        # Read and parse CSV
+        students_created = []
+        errors = []
+        
+        with open(temp_file.name, 'r', encoding='utf-8') as f:
+            reader = csv.DictReader(f)
+            
+            for row_num, row in enumerate(reader, start=2):  # Start at 2 (1 is header)
+                try:
+                    # Find class_id from grade and section
+                    class_statement = select(Class).where(
+                        and_(
+                            Class.school_id == current_user.school_id,
+                            Class.grade == row.get('class_grade', '').strip(),
+                            Class.section == row.get('class_section', '').strip()
+                        )
+                    )
+                    class_result = await session.execute(class_statement)
+                    class_obj = class_result.scalars().first()
+                    
+                    if not class_obj:
+                        errors.append(f"Row {row_num}: Class {row.get('class_grade')}-{row.get('class_section')} not found")
+                        continue
+                    
+                    # Check teacher access to this class
+                    if current_user.role == "TEACHER" and class_obj.id not in assigned_class_ids:
+                        errors.append(f"Row {row_num}: You don't have access to class {row.get('class_grade')}-{row.get('class_section')}")
+                        continue
+                    
+                    # Check for duplicate admission number
+                    adm_statement = select(Student).where(
+                        and_(
+                            Student.school_id == current_user.school_id,
+                            Student.admission_number == row.get('admission_number', '').strip()
+                        )
+                    )
+                    adm_result = await session.execute(adm_statement)
+                    if adm_result.scalars().first():
+                        errors.append(f"Row {row_num}: Admission number {row.get('admission_number')} already exists")
+                        continue
+                    
+                    # Parse gender
+                    gender_str = row.get('gender', '').strip().upper()
+                    if gender_str in ['M', 'MALE']:
+                        gender = Gender.MALE
+                    elif gender_str in ['F', 'FEMALE']:
+                        gender = Gender.FEMALE
+                    else:
+                        gender = Gender.OTHER
+                    
+                    # Parse blood group
+                    blood_group = None
+                    bg_str = row.get('blood_group', '').strip()
+                    if bg_str:
+                        try:
+                            blood_group = BloodGroup(bg_str)
+                        except ValueError:
+                            pass  # Invalid blood group, skip
+                    
+                    # Parse dates using flexible parser
+                    dob = parse_date_flexible(row.get('date_of_birth', ''))
+                    if not dob:
+                        errors.append(f"Row {row_num}: Date of birth is required")
+                        continue
+                    
+                    doa_str = row.get('date_of_admission', '').strip()
+                    doa = parse_date_flexible(doa_str) if doa_str else date.today()
+                    
+                    # Parse annual income
+                    income_str = row.get('annual_income', '').strip()
+                    annual_income = float(income_str) if income_str else None
+                    
+                    # Create student
+                    student = Student(
+                        school_id=current_user.school_id,
+                        admission_number=row.get('admission_number', '').strip(),
+                        name=row.get('name', '').strip(),
+                        date_of_birth=dob,
+                        gender=gender,
+                        class_id=class_obj.id,
+                        roll_no=row.get('roll_no', '').strip(),
+                        address=row.get('address', '').strip() or None,
+                        father_name=row.get('father_name', '').strip(),
+                        mother_name=row.get('mother_name', '').strip() or None,
+                        father_occupation=row.get('father_occupation', '').strip() or None,
+                        mother_occupation=row.get('mother_occupation', '').strip() or None,
+                        annual_income=annual_income,
+                        contact_number=row.get('contact_number', '').strip(),
+                        parent_email=row.get('parent_email', '').strip() or None,
+                        blood_group=blood_group,
+                        date_of_admission=doa
+                    )
+                    
+                    session.add(student)
+                    students_created.append(row.get('admission_number', ''))
+                    
+                except Exception as e:
+                    errors.append(f"Row {row_num}: {str(e)}")
+        
+        # Commit all valid students
+        if students_created:
+            await session.commit()
+        
+        return {
+            "message": f"Successfully created {len(students_created)} students",
+            "created_count": len(students_created),
+            "error_count": len(errors),
+            "errors": errors[:20] if errors else []  # Return first 20 errors
+        }
+        
+    finally:
+        # Clean up temp file
+        if temp_file and os.path.exists(temp_file.name):
+            os.unlink(temp_file.name)
 
 # --- Attendance ---
 @app.post("/attendance/", response_model=Attendance)
@@ -397,12 +956,27 @@ async def list_classes(
     current_user: TokenData = Depends(get_current_user),
     session: AsyncSession = Depends(get_session)
 ):
-    """Get all classes for the school"""
+    """Get all classes for the school with student count.
+    - Principal: Can see and edit all classes
+    - Teacher: Can see all classes but only edit assigned ones
+    """
+    # Base query
     statement = select(Class).where(Class.school_id == current_user.school_id)
+    
+    # Teachers can view all classes (but can only add students to assigned classes)
     result = await session.execute(statement)
     classes = result.scalars().all()
     
-    # Enrich with teacher names
+    # Get teacher's assigned classes if role is TEACHER
+    assigned_class_ids = []
+    if current_user.role == "TEACHER":
+        user_statement = select(User).where(User.id == current_user.user_id)
+        user_result = await session.execute(user_statement)
+        teacher = user_result.scalars().first()
+        if teacher and teacher.assigned_classes:
+            assigned_class_ids = [int(c) for c in teacher.assigned_classes]
+    
+    # Enrich with teacher names and student count
     class_reads = []
     for cls in classes:
         teacher_name = None
@@ -413,12 +987,29 @@ async def list_classes(
             if teacher:
                 teacher_name = teacher.name
         
+        # Get student count for this class
+        from sqlalchemy import func
+        count_stmt = select(func.count(Student.id)).where(
+            and_(
+                Student.school_id == current_user.school_id,
+                Student.class_id == cls.id,
+                Student.is_active == True
+            )
+        )
+        count_result = await session.execute(count_stmt)
+        student_count = count_result.scalar() or 0
+        
+        # Determine if user can edit this class
+        can_edit = current_user.role == "PRINCIPAL" or cls.id in assigned_class_ids
+        
         class_reads.append(ClassRead(
             id=cls.id,
             grade=cls.grade,
             section=cls.section,
             class_teacher_id=cls.class_teacher_id,
             class_teacher_name=teacher_name,
+            student_count=student_count,
+            can_edit=can_edit,
             created_at=cls.created_at
         ))
     
@@ -454,7 +1045,7 @@ async def create_class(
     await session.commit()
     await session.refresh(new_class)
     
-    # Get teacher name if assigned
+    # Add class to teacher's assigned_classes if teacher is set
     teacher_name = None
     if new_class.class_teacher_id:
         teacher_stmt = select(User).where(User.id == new_class.class_teacher_id)
@@ -462,6 +1053,13 @@ async def create_class(
         teacher = teacher_result.scalars().first()
         if teacher:
             teacher_name = teacher.name
+            # Add this class to teacher's assigned_classes
+            class_id_str = str(new_class.id)
+            if not teacher.assigned_classes:
+                teacher.assigned_classes = [class_id_str]
+            elif class_id_str not in teacher.assigned_classes:
+                teacher.assigned_classes = teacher.assigned_classes + [class_id_str]
+            await session.commit()
     
     return ClassRead(
         id=new_class.id,
@@ -489,9 +1087,35 @@ async def update_class(
     if not cls:
         raise HTTPException(status_code=404, detail="Class not found")
     
+    old_teacher_id = cls.class_teacher_id
+    new_teacher_id = class_data.class_teacher_id
+    
     cls.grade = class_data.grade
     cls.section = class_data.section
-    cls.class_teacher_id = class_data.class_teacher_id
+    cls.class_teacher_id = new_teacher_id
+    
+    # Update teacher's assigned_classes when class teacher changes
+    class_id_str = str(class_id)
+    
+    # Remove class from old teacher's assigned_classes
+    if old_teacher_id and old_teacher_id != new_teacher_id:
+        old_teacher_stmt = select(User).where(User.id == old_teacher_id)
+        old_teacher_result = await session.execute(old_teacher_stmt)
+        old_teacher = old_teacher_result.scalars().first()
+        if old_teacher and old_teacher.assigned_classes:
+            if class_id_str in old_teacher.assigned_classes:
+                old_teacher.assigned_classes = [c for c in old_teacher.assigned_classes if c != class_id_str]
+    
+    # Add class to new teacher's assigned_classes
+    if new_teacher_id:
+        new_teacher_stmt = select(User).where(User.id == new_teacher_id)
+        new_teacher_result = await session.execute(new_teacher_stmt)
+        new_teacher = new_teacher_result.scalars().first()
+        if new_teacher:
+            if not new_teacher.assigned_classes:
+                new_teacher.assigned_classes = [class_id_str]
+            elif class_id_str not in new_teacher.assigned_classes:
+                new_teacher.assigned_classes = new_teacher.assigned_classes + [class_id_str]
     
     await session.commit()
     await session.refresh(cls)
