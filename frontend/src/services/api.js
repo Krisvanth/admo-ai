@@ -202,4 +202,101 @@ export const timetableEntryService = {
     }
 };
 
+// Student Service
+export const studentService = {
+    // Get students with pagination, optionally filtered by class and search
+    getStudents: async (classId = null, isActive = true, page = 1, pageSize = 20, search = null) => {
+        let url = `/students/?is_active=${isActive}&page=${page}&page_size=${pageSize}`;
+        if (classId) {
+            url += `&class_id=${classId}`;
+        }
+        if (search) {
+            url += `&search=${encodeURIComponent(search)}`;
+        }
+        const response = await api.get(url);
+        return response.data;
+    },
+    
+    // Get a single student by ID
+    getStudent: async (studentId) => {
+        const response = await api.get(`/students/${studentId}`);
+        return response.data;
+    },
+    
+    // Create a new student
+    createStudent: async (studentData) => {
+        const response = await api.post('/students/', studentData);
+        return response.data;
+    },
+    
+    // Update a student
+    updateStudent: async (studentId, studentData) => {
+        const response = await api.put(`/students/${studentId}`, studentData);
+        return response.data;
+    },
+    
+    // Delete a student
+    deleteStudent: async (studentId) => {
+        const response = await api.delete(`/students/${studentId}`);
+        return response.data;
+    },
+    
+    // Download CSV template
+    downloadTemplate: async () => {
+        const response = await api.get('/students/csv-template/', {
+            responseType: 'blob'
+        });
+        // Create download link
+        const url = window.URL.createObjectURL(new Blob([response.data]));
+        const link = document.createElement('a');
+        link.href = url;
+        link.setAttribute('download', 'student_template.csv');
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(url);
+    },
+    
+    // Export students to CSV
+    exportStudents: async (classId = null, isActive = true) => {
+        let url = `/students/export/?is_active=${isActive}`;
+        if (classId) {
+            url += `&class_id=${classId}`;
+        }
+        const response = await api.get(url, {
+            responseType: 'blob'
+        });
+        // Extract filename from Content-Disposition header or use default
+        const contentDisposition = response.headers['content-disposition'];
+        let filename = 'students_export.csv';
+        if (contentDisposition) {
+            const match = contentDisposition.match(/filename=(.+)/);
+            if (match) {
+                filename = match[1];
+            }
+        }
+        // Create download link
+        const blobUrl = window.URL.createObjectURL(new Blob([response.data]));
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.setAttribute('download', filename);
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.URL.revokeObjectURL(blobUrl);
+    },
+    
+    // Bulk upload students from CSV
+    bulkUpload: async (file) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await api.post('/students/bulk-upload/', formData, {
+            headers: {
+                'Content-Type': 'multipart/form-data'
+            }
+        });
+        return response.data;
+    }
+};
+
 export default api;
