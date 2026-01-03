@@ -6,6 +6,37 @@ This document tracks planned enhancements and improvements for each module of th
 
 ---
 
+## 📊 Dashboard Module
+
+**Status:** ✅ Core Complete
+
+### Completed Features
+- ✅ Role-based dashboard (Principal & Teacher views)
+- ✅ Real-time statistics from backend
+- ✅ Today's schedule for teachers with time-based status
+- ✅ Class-wise student distribution
+- ✅ Leave request management (approve/reject inline)
+- ✅ Quick action buttons
+- ✅ Recent activity feed
+- ✅ Birthday notifications widget
+
+| Enhancement | Priority | Description |
+|-------------|----------|-------------|
+| Attendance Chart | High | Weekly line chart showing attendance trends (visual) |
+| Upcoming Exams Widget | High | Dynamic exam countdown from Exam table (currently hardcoded) |
+| Quick Stats Sparklines | Medium | Mini trend graphs in StatCards showing 7-day trends |
+| Pending Tasks Counter | Medium | Centralized action items count (leaves, marks, attendance) |
+| Class Performance Summary | Medium | Principal: avg attendance by class with hover details |
+| Weather Widget | Medium | Local weather API integration for activity planning |
+| Notification Bell Icon | Medium | Unread notifications count with dropdown in header |
+| Calendar Mini View | Low | Current month with event dots, clickable navigation |
+| Fee Collection Progress Bar | Low | Visual bar with class-wise breakdown |
+| Teacher Attendance Status | Low | Principal view of staff present/absent today |
+| Daily Motivational Quote | Low | Educational quotes API, refreshes daily |
+| Export Dashboard as PDF | Low | Generate daily/weekly reports for meetings |
+
+---
+
 ## 📋 Leave Request Module
 
 **Status:** ✅ Core Complete

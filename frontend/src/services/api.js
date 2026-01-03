@@ -299,4 +299,42 @@ export const studentService = {
     }
 };
 
+// Dashboard Service
+export const dashboardService = {
+    // Get dashboard statistics
+    getStats: async () => {
+        const response = await api.get('/dashboard/stats');
+        return response.data;
+    },
+    
+    // Get timetable config for schedule display
+    getTimetableConfig: async () => {
+        const response = await api.get('/dashboard/timetable-config');
+        return response.data;
+    },
+    
+    // Get birthdays
+    getBirthdays: async () => {
+        const response = await api.get('/dashboard/birthdays');
+        return response.data;
+    },
+    
+    // Get recent activity
+    getRecentActivity: async (limit = 10) => {
+        const response = await api.get(`/dashboard/recent-activity?limit=${limit}`);
+        return response.data;
+    },
+    
+    // Log activity
+    logActivity: async (action, description, entityType = null, entityId = null) => {
+        const response = await api.post('/activity-log/', {
+            action,
+            description,
+            entity_type: entityType,
+            entity_id: entityId
+        });
+        return response.data;
+    }
+};
+
 export default api;

@@ -118,6 +118,7 @@ class User(SQLModel, table=True):
     email: EmailStr = Field(unique=True, index=True)
     password_hash: str
     role: UserRole
+    date_of_birth: Optional[date] = None
     assigned_classes: Optional[List[str]] = Field(default=None, sa_column=Column(JSON)) # List of Class IDs
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -128,6 +129,8 @@ class UserCreate(SQLModel):
     email: EmailStr
     password: str
     role: UserRole
+    date_of_birth: Optional[date] = None
+    assigned_classes: Optional[List[str]] = None
 
 class UserLogin(SQLModel):
     email: EmailStr
@@ -402,3 +405,14 @@ class LeaveRequest(SQLModel, table=True):
 
 class LeaveRequestRead(LeaveRequest):
     teacher_name: str
+
+# --- Activity Log ---
+class ActivityLog(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    school_id: int = Field(foreign_key="school.id")
+    user_id: int = Field(foreign_key="user.id")
+    action: str  # "student_added", "leave_approved", "timetable_updated", etc.
+    description: str  # Human readable description
+    entity_type: Optional[str] = None  # "student", "leave", "timetable", etc.
+    entity_id: Optional[int] = None  # ID of the affected entity
+    created_at: datetime = Field(default_factory=datetime.utcnow)

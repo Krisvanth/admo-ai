@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Calendar, UserX, Clock, Trash2, Settings, Plus, Save, RotateCcw, Edit2, X, Coffee, UtensilsCrossed, Flag, AlertTriangle, BookOpen, Users } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { leaveService, timetableConfigService, classService, subjectService, teacherService, timetableEntryService } from '@/services/api';
@@ -6,9 +7,22 @@ import { leaveService, timetableConfigService, classService, subjectService, tea
 const Timetable = () => {
     const { user } = useAuth();
     const isPrincipal = user?.role === 'PRINCIPAL';
+    const [searchParams] = useSearchParams();
     
     // Main tabs: 'timetable' or 'leaves'
-    const [mainTab, setMainTab] = useState('timetable');
+    const [mainTab, setMainTab] = useState(() => {
+        const tab = searchParams.get('tab');
+        return tab === 'leave' ? 'leaves' : 'timetable';
+    });
+    
+    // Update mainTab when URL search params change
+    useEffect(() => {
+        const tab = searchParams.get('tab');
+        if (tab === 'leave') {
+            setMainTab('leaves');
+        }
+    }, [searchParams]);
+    
     // Sub-tabs within timetable: 'view' or 'config'
     const [timetableSubTab, setTimetableSubTab] = useState('view');
     const [timetableViewMode, setTimetableViewMode] = useState('class');

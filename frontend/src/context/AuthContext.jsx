@@ -32,9 +32,7 @@ export const AuthProvider = ({ children }) => {
                         role: decoded.role,
                         school_id: decoded.school_id,
                         id: decoded.user_id,
-                        // Name might not be in token depending on backend, 
-                        // but we can add it or fetch it. For now, we'll use email as name fallback
-                        name: decoded.sub
+                        name: decoded.name || decoded.sub
                     });
                 }
             } catch (err) {
@@ -59,7 +57,7 @@ export const AuthProvider = ({ children }) => {
                 role: decoded.role,
                 school_id: decoded.school_id,
                 id: decoded.user_id,
-                name: decoded.sub
+                name: decoded.name || decoded.sub
             });
             return true;
         } catch (err) {
