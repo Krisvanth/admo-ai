@@ -345,21 +345,171 @@ class Exam(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     school_id: int = Field(foreign_key="school.id")
     name: str
+    class_id: int = Field(foreign_key="class.id")
     start_date: date
     end_date: date
-    classes_involved: List[str] = Field(sa_column=Column(JSON))
-    status: ExamStatus
+    pass_percentage: float = 35.0  # Minimum percentage to pass (school-configurable)
+    status: ExamStatus = Field(default=ExamStatus.DRAFT)
+    created_by: int = Field(foreign_key="user.id")
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Exam Request/Response Models
+class ExamCreate(SQLModel):
+    name: str
+    class_id: int
+    start_date: date
+    end_date: date
+    pass_percentage: float = 35.0  # Minimum percentage to pass
+    subject_ids: List[int]  # Subjects to include in the exam
+    default_start_time: str = "09:00"  # Default exam start time
+    default_duration_minutes: int = 120  # Default 2 hours per exam
+    default_max_marks: float = 100  # Default max marks per subject
+
+
+class ExamUpdate(SQLModel):
+    name: Optional[str] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
+class ExamRead(SQLModel):
+    id: int
+    name: str
+    class_id: int
+    class_name: Optional[str] = None
+    start_date: date
+    end_date: date
+    pass_percentage: float
+    status: ExamStatus
+    created_by: int
+    created_by_name: Optional[str] = None
+    subject_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+# Exam Timetable Entry - Individual subject schedule within an exam
+class ExamTimetableEntry(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    school_id: int = Field(foreign_key="school.id")
+    exam_id: int = Field(foreign_key="exam.id")
+    subject_id: int = Field(foreign_key="subject.id")
+    exam_date: date
+    start_time: str  # "09:00"
+    end_time: str    # "11:00"
+    max_marks: float
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class ExamTimetableEntryCreate(SQLModel):
+    subject_id: int
+    exam_date: date
+    start_time: str
+    end_time: str
+    max_marks: float
+
+class ExamTimetableEntryUpdate(SQLModel):
+    exam_date: Optional[date] = None
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    max_marks: Optional[float] = None
+
+class ExamTimetableEntryRead(SQLModel):
+    id: int
+    exam_id: int
+    subject_id: int
+    subject_name: Optional[str] = None
+    subject_code: Optional[str] = None
+    exam_date: date
+    start_time: str
+    end_time: str
+    max_marks: float
+    created_at: datetime
+
+class MarkStatus(str, Enum):
+    DRAFT = "Draft"
+    PUBLISHED = "Published"
 
 class Mark(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     school_id: int = Field(foreign_key="school.id")
     exam_id: int = Field(foreign_key="exam.id")
+    exam_timetable_entry_id: int = Field(foreign_key="examtimetableentry.id")  # Links to specific subject in exam
     student_id: int = Field(foreign_key="student.id")
-    subject: str
-    score: float
+    subject_id: int = Field(foreign_key="subject.id")  # Denormalized for easier queries
+    marks_obtained: Optional[float] = None  # None if not entered, blank as per requirement
+    is_absent: bool = False
+    remarks: Optional[str] = None
+    status: MarkStatus = Field(default=MarkStatus.DRAFT)
+    entered_by: int = Field(foreign_key="user.id")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+# --- Marks CRUD Models ---
+class MarkCreate(SQLModel):
+    student_id: int
+    marks_obtained: Optional[float] = None
+    is_absent: bool = False
+    remarks: Optional[str] = None
+
+class MarkUpdate(SQLModel):
+    marks_obtained: Optional[float] = None
+    is_absent: Optional[bool] = None
+    remarks: Optional[str] = None
+
+class MarkBulkEntry(SQLModel):
+    """Used for bulk marks entry - list of student marks"""
+    exam_id: int
+    exam_timetable_entry_id: int  # The specific subject entry
+    marks: List[MarkCreate]
+
+class MarkRead(SQLModel):
+    id: int
+    exam_id: int
+    exam_timetable_entry_id: int
+    student_id: int
+    subject_id: int
+    student_name: Optional[str] = None
+    student_admission_number: Optional[str] = None
+    marks_obtained: Optional[float] = None
     max_marks: float
-    graded_by: Optional[int] = Field(default=None, foreign_key="user.id")
+    is_absent: bool
+    remarks: Optional[str] = None
+    status: MarkStatus
+    entered_by: int
+    entered_by_name: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+class MarksEntryResponse(SQLModel):
+    """Response for marks entry page - includes exam/subject info and student marks"""
+    exam_id: int
+    exam_name: str
+    exam_timetable_entry_id: int
+    subject_id: int
+    subject_name: str
+    max_marks: float
+    class_id: int
+    class_name: str
+    status: str  # Overall marks status for this subject (Draft/Published/Pending)
+    total_students: int
+    marks_entered: int
+    marks: List[MarkRead]
+
+class MarksPublishRequest(SQLModel):
+    exam_id: int
+    exam_timetable_entry_id: int
+
+class MarksSummary(SQLModel):
+    """Summary of marks entry status for an exam"""
+    exam_id: int
+    exam_name: str
+    exam_timetable_entry_id: int
+    subject_id: int
+    subject_name: str
+    max_marks: float
+    total_students: int
+    marks_entered: int
+    marks_published: int
+    status: str  # "Pending" | "In Progress" | "Completed" | "Published"
 
 class Communication(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)

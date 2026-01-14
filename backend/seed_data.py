@@ -104,37 +104,37 @@ async def seed_database():
     async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
     
     async with async_session() as session:
-        print("🌱 Starting database seeding...")
+        print("[*] Starting database seeding...")
         
         # Check if data already exists
         result = await session.execute(select(School).limit(1))
         existing_school = result.scalars().first()
         
         if existing_school:
-            print(f"\n⚠️  Data already exists in database!")
+            print(f"\n[!] Data already exists in database!")
             print(f"   Found school: {existing_school.name}")
-            print(f"\n❓ Do you want to:")
+            print(f"\n[?] Do you want to:")
             print(f"   1. Skip seeding (existing data will be kept)")
             print(f"   2. Add new school (will create additional school)")
             print(f"   3. Exit")
             choice = input("\nEnter choice (1/2/3): ").strip()
             
             if choice == "3":
-                print("❌ Seeding cancelled")
+                print("[X] Seeding cancelled")
                 return
             elif choice == "2":
                 # Continue with new school
                 school_name = f"Sri Venkateswara High School {random.randint(2, 99)}"
                 email_suffix = f"school{random.randint(2, 99)}.edu.in"
             else:
-                print("✓ Using existing data")
+                print("[OK] Using existing data")
                 return
         else:
             school_name = "Sri Venkateswara High School"
             email_suffix = "srivenkateshwara.edu.in"
         
         # 1. Create School
-        print("\n📚 Creating school...")
+        print("\n[*] Creating school...")
         school = School(
             name=school_name,
             address="123, Anna Salai, T. Nagar, Chennai, Tamil Nadu 600017",
@@ -153,10 +153,10 @@ async def seed_database():
         await session.commit()
         await session.refresh(school)
         school_id = school.id
-        print(f"✓ Created school: {school.name} (ID: {school_id})")
+        print(f"[OK] Created school: {school.name} (ID: {school_id})")
         
         # 2. Create Principal
-        print("\n👔 Creating principal...")
+        print("\n[*] Creating principal...")
         principal_email = f"principal@{email_suffix}"
         principal = User(
             school_id=school_id,
@@ -168,11 +168,11 @@ async def seed_database():
         )
         session.add(principal)
         await session.commit()
-        print(f"✓ Created principal: {principal.name}")
-        print(f"  📧 Email: {principal.email} | 🔑 Password: principal123")
+        print(f"[OK] Created principal: {principal.name}")
+        print(f"    Email: {principal.email} | Password: principal123")
         
         # 3. Create Classes
-        print("\n🏫 Creating classes...")
+        print("\n[*] Creating classes...")
         classes_created = []
         for grade in GRADES:
             for section in SECTIONS:
@@ -187,10 +187,10 @@ async def seed_database():
         await session.commit()
         for cls in classes_created:
             await session.refresh(cls)
-        print(f"✓ Created {len(classes_created)} classes (Grades 6-10, Sections A-C)")
+        print(f"[OK] Created {len(classes_created)} classes (Grades 6-10, Sections A-C)")
         
         # 4. Create Teachers
-        print("\n👨‍🏫 Creating teachers...")
+        print("\n[*] Creating teachers...")
         teachers = []
         teacher_count = 12
         
@@ -226,19 +226,19 @@ async def seed_database():
         for teacher in teachers:
             await session.refresh(teacher)
         
-        print(f"✓ Created {len(teachers)} teachers")
-        print(f"  📧 All teacher emails follow pattern: firstname.lastname@{email_suffix}")
-        print(f"  🔑 All teacher passwords: teacher123")
+        print(f"[OK] Created {len(teachers)} teachers")
+        print(f"    All teacher emails follow pattern: firstname.lastname@{email_suffix}")
+        print(f"    All teacher passwords: teacher123")
         
         # Assign class teachers
-        print("\n🎓 Assigning class teachers...")
+        print("\n[*] Assigning class teachers...")
         for cls in classes_created:
             cls.class_teacher_id = random.choice(teachers).id
         await session.commit()
-        print(f"✓ Assigned class teachers to all classes")
+        print(f"[OK] Assigned class teachers to all classes")
         
         # 5. Create Subjects
-        print("\n📖 Creating subjects...")
+        print("\n[*] Creating subjects...")
         subjects_created = []
         for subject_name in SUBJECTS:
             subject = Subject(
@@ -252,10 +252,10 @@ async def seed_database():
         await session.commit()
         for subj in subjects_created:
             await session.refresh(subj)
-        print(f"✓ Created {len(subjects_created)} subjects")
+        print(f"[OK] Created {len(subjects_created)} subjects")
         
         # 6. Create Students
-        print("\n👨‍🎓 Creating students...")
+        print("\n[*] Creating students...")
         students_created = []
         
         for cls in classes_created:
@@ -306,10 +306,10 @@ async def seed_database():
                 students_created.append(student)
         
         await session.commit()
-        print(f"✓ Created {len(students_created)} students across all classes")
+        print(f"[OK] Created {len(students_created)} students across all classes")
         
         # 7. Create Timetable Entries
-        print("\n📅 Creating timetable entries...")
+        print("\n[*] Creating timetable entries...")
         timetable_count = 0
         
         for cls in classes_created:
@@ -337,10 +337,10 @@ async def seed_database():
                         timetable_count += 1
         
         await session.commit()
-        print(f"✓ Created {timetable_count} timetable entries")
+        print(f"[OK] Created {timetable_count} timetable entries")
         
         # 8. Create Leave Requests
-        print("\n📝 Creating leave requests...")
+        print("\n[*] Creating leave requests...")
         leave_requests = []
         
         # Teacher leaves (only teachers as per current model)
@@ -367,10 +367,10 @@ async def seed_database():
             leave_requests.append(leave)
         
         await session.commit()
-        print(f"✓ Created {len(leave_requests)} leave requests")
+        print(f"[OK] Created {len(leave_requests)} leave requests")
         
         # 9. Create Activity Logs
-        print("\n📊 Creating activity logs...")
+        print("\n[*] Creating activity logs...")
         activities = []
         
         for i in range(30):
@@ -399,12 +399,12 @@ async def seed_database():
             activities.append(activity)
         
         await session.commit()
-        print(f"✓ Created {len(activities)} activity logs")
+        print(f"[OK] Created {len(activities)} activity logs")
         
         print("\n" + "="*60)
-        print("✅ Database seeding completed successfully!")
+        print("[SUCCESS] Database seeding completed successfully!")
         print("="*60)
-        print("\n📊 Summary:")
+        print("\n[*] Summary:")
         print(f"  • School: {school.name}")
         print(f"  • Principal: 1")
         print(f"  • Teachers: {len(teachers)}")
@@ -415,19 +415,19 @@ async def seed_database():
         print(f"  • Leave Requests: {len(leave_requests)}")
         print(f"  • Activity Logs: {len(activities)}")
         
-        print("\n🔐 Login Credentials:")
+        print("\n[*] Login Credentials:")
         print(f"  Principal: {principal_email} / principal123")
         print(f"  Teachers: [firstname.lastname]@{email_suffix} / teacher123")
         print(f"  Example: {teachers[0].email} / teacher123")
         
-        print("\n💡 Note:")
-        print("  • Some students have birthdays in January (current month)")
-        print("  • Some teachers have birthdays configured")
-        print("  • Leave requests span past, present, and future dates")
-        print("  • All data uses South Indian names and locations")
+        print("\n[*] Note:")
+        print("  - Some students have birthdays in January (current month)")
+        print("  - Some teachers have birthdays configured")
+        print("  - Leave requests span past, present, and future dates")
+        print("  - All data uses South Indian names and locations")
 
 
 if __name__ == "__main__":
-    print("🚀 South Indian School Data Seeder")
+    print("[START] South Indian School Data Seeder")
     print("="*60)
     asyncio.run(seed_database())
