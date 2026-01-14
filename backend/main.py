@@ -9,7 +9,11 @@ from models import (
     TimeSlot, TimetableConfig, PeriodType, DEFAULT_TIMETABLE_CONFIG,
     ClassCreate, ClassRead, Subject, SubjectCreate, SubjectRead,
     TimetableEntry, TimetableEntryCreate, TimetableEntryRead, TimetableBulkUpdate,
-    StudentCreate, StudentUpdate, StudentRead, StudentBulkCreate, StudentPaginatedResponse, Gender, BloodGroup
+    StudentCreate, StudentUpdate, StudentRead, StudentBulkCreate, StudentPaginatedResponse, Gender, BloodGroup,
+    ExamCreate, ExamUpdate, ExamRead, ExamTimetableEntry, ExamTimetableEntryCreate, 
+    ExamTimetableEntryUpdate, ExamTimetableEntryRead, ExamStatus,
+    MarkStatus, MarkCreate, MarkUpdate, MarkBulkEntry, MarkRead, 
+    MarksEntryResponse, MarksPublishRequest, MarksSummary
 )
 from auth_utils import get_password_hash, verify_password, create_access_token, get_current_user, require_role, TokenData
 from typing import List, Optional
@@ -1591,32 +1595,1320 @@ async def list_timetables(session: AsyncSession = Depends(get_session)):
     result = await session.execute(statement)
     return result.scalars().all()
 
-# --- Exams & Marks ---
-@app.post("/exams/", response_model=Exam)
-async def create_exam(exam: Exam, session: AsyncSession = Depends(get_session)):
+# --- Exams & Exam Timetable ---
+
+# Helper function to check if user has access to a class (for exams)
+async def check_class_access_for_exam(user: TokenData, class_id: int, session: AsyncSession) -> bool:
+    """Check if teacher has access to create/edit exams for a specific class"""
+    if user.role == "PRINCIPAL":
+        return True
+    
+    # Get teacher's assigned classes
+    statement = select(User).where(User.id == user.user_id)
+    result = await session.execute(statement)
+    teacher = result.scalars().first()
+    
+    if not teacher or not teacher.assigned_classes:
+        return False
+    
+    return str(class_id) in teacher.assigned_classes
+
+# Helper to build ExamRead with enriched data
+async def build_exam_read(exam: Exam, session: AsyncSession) -> ExamRead:
+    """Convert Exam to ExamRead with class name and creator name"""
+    # Get class info
+    class_statement = select(Class).where(Class.id == exam.class_id)
+    class_result = await session.execute(class_statement)
+    class_obj = class_result.scalars().first()
+    class_name = f"{class_obj.grade}-{class_obj.section}" if class_obj else None
+    
+    # Get creator info
+    user_statement = select(User).where(User.id == exam.created_by)
+    user_result = await session.execute(user_statement)
+    creator = user_result.scalars().first()
+    created_by_name = creator.name if creator else None
+    
+    # Get subject count
+    count_statement = select(ExamTimetableEntry).where(
+        ExamTimetableEntry.exam_id == exam.id
+    )
+    count_result = await session.execute(count_statement)
+    subject_count = len(count_result.scalars().all())
+    
+    return ExamRead(
+        id=exam.id,
+        name=exam.name,
+        class_id=exam.class_id,
+        class_name=class_name,
+        start_date=exam.start_date,
+        end_date=exam.end_date,
+        pass_percentage=exam.pass_percentage,
+        status=exam.status,
+        created_by=exam.created_by,
+        created_by_name=created_by_name,
+        subject_count=subject_count,
+        created_at=exam.created_at,
+        updated_at=exam.updated_at
+    )
+
+@app.post("/exams/", response_model=ExamRead)
+async def create_exam(
+    exam_data: ExamCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Create a new exam with auto-generated schedule.
+    User provides: name, class, date range, and subjects.
+    Backend auto-generates the timetable distributing subjects across available dates.
+    """
+    from datetime import timedelta
+    
+    # Check class access
+    has_access = await check_class_access_for_exam(current_user, exam_data.class_id, session)
+    if not has_access:
+        raise HTTPException(
+            status_code=403, 
+            detail="You don't have permission to create exams for this class"
+        )
+    
+    # Validate dates
+    if exam_data.end_date < exam_data.start_date:
+        raise HTTPException(status_code=400, detail="End date cannot be before start date")
+    
+    today = date.today()
+    if exam_data.start_date < today:
+        raise HTTPException(status_code=400, detail="Start date cannot be in the past")
+    
+    # Validate subjects
+    if not exam_data.subject_ids or len(exam_data.subject_ids) == 0:
+        raise HTTPException(status_code=400, detail="At least one subject is required")
+    
+    # Verify class exists
+    class_statement = select(Class).where(
+        and_(Class.id == exam_data.class_id, Class.school_id == current_user.school_id)
+    )
+    class_result = await session.execute(class_statement)
+    if not class_result.scalars().first():
+        raise HTTPException(status_code=404, detail="Class not found")
+    
+    # Verify all subjects exist
+    subjects = []
+    for subject_id in exam_data.subject_ids:
+        subject = await session.get(Subject, subject_id)
+        if not subject or subject.school_id != current_user.school_id:
+            raise HTTPException(status_code=404, detail=f"Subject with ID {subject_id} not found")
+        subjects.append(subject)
+    
+    # Calculate available exam days (excluding Sundays)
+    available_dates = []
+    current_date = exam_data.start_date
+    while current_date <= exam_data.end_date:
+        # Skip Sundays (weekday() == 6)
+        if current_date.weekday() != 6:
+            available_dates.append(current_date)
+        current_date += timedelta(days=1)
+    
+    if len(available_dates) < len(subjects):
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Not enough exam days ({len(available_dates)}) for {len(subjects)} subjects. Extend the date range or reduce subjects."
+        )
+    
+    # Create exam
+    exam = Exam(
+        school_id=current_user.school_id,
+        name=exam_data.name,
+        class_id=exam_data.class_id,
+        start_date=exam_data.start_date,
+        end_date=exam_data.end_date,
+        pass_percentage=exam_data.pass_percentage,
+        status=ExamStatus.DRAFT,
+        created_by=current_user.user_id
+    )
+    
     session.add(exam)
     await session.commit()
     await session.refresh(exam)
-    return exam
+    
+    # Auto-generate exam timetable entries
+    # Distribute subjects evenly across available dates
+    import random
+    random.shuffle(available_dates)  # Randomize to make each schedule unique
+    
+    # Calculate end time from start time and duration
+    start_hour, start_min = map(int, exam_data.default_start_time.split(':'))
+    duration_hours = exam_data.default_duration_minutes // 60
+    duration_mins = exam_data.default_duration_minutes % 60
+    end_hour = start_hour + duration_hours
+    end_min = start_min + duration_mins
+    if end_min >= 60:
+        end_hour += 1
+        end_min -= 60
+    end_time = f"{end_hour:02d}:{end_min:02d}"
+    
+    for i, subject in enumerate(subjects):
+        entry = ExamTimetableEntry(
+            school_id=current_user.school_id,
+            exam_id=exam.id,
+            subject_id=subject.id,
+            exam_date=available_dates[i],
+            start_time=exam_data.default_start_time,
+            end_time=end_time,
+            max_marks=exam_data.default_max_marks
+        )
+        session.add(entry)
+    
+    await session.commit()
+    
+    # Log activity
+    activity = ActivityLog(
+        school_id=current_user.school_id,
+        user_id=current_user.user_id,
+        action="exam_created",
+        description=f"Created exam: {exam.name} with {len(subjects)} subjects",
+        entity_type="exam",
+        entity_id=exam.id
+    )
+    session.add(activity)
+    await session.commit()
+    
+    return await build_exam_read(exam, session)
 
-@app.get("/exams/", response_model=List[Exam])
-async def list_exams(session: AsyncSession = Depends(get_session)):
-    statement = select(Exam)
+@app.get("/exams/", response_model=List[ExamRead])
+async def list_exams(
+    class_id: Optional[int] = None,
+    status: Optional[ExamStatus] = None,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    List exams filtered by class and status.
+    Teachers see exams for their assigned classes only.
+    Principals see all exams.
+    """
+    # Build base query
+    conditions = [Exam.school_id == current_user.school_id]
+    
+    # Role-based filtering
+    if current_user.role == "TEACHER":
+        # Get teacher's assigned classes
+        user_statement = select(User).where(User.id == current_user.user_id)
+        user_result = await session.execute(user_statement)
+        teacher = user_result.scalars().first()
+        
+        if teacher and teacher.assigned_classes:
+            assigned_class_ids = [int(c) for c in teacher.assigned_classes]
+            conditions.append(Exam.class_id.in_(assigned_class_ids))
+        else:
+            # Teacher has no assigned classes
+            return []
+    
+    # Apply filters
+    if class_id:
+        conditions.append(Exam.class_id == class_id)
+    
+    if status:
+        conditions.append(Exam.status == status)
+    
+    # Execute query
+    statement = select(Exam).where(and_(*conditions)).order_by(Exam.start_date.desc())
     result = await session.execute(statement)
-    return result.scalars().all()
+    exams = result.scalars().all()
+    
+    # Build response with enriched data
+    return [await build_exam_read(exam, session) for exam in exams]
 
-@app.post("/marks/", response_model=Mark)
-async def submit_mark(mark: Mark, session: AsyncSession = Depends(get_session)):
+@app.get("/exams/{exam_id}", response_model=ExamRead)
+async def get_exam(
+    exam_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get a single exam by ID"""
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Check access for teachers
+    if current_user.role == "TEACHER":
+        has_access = await check_class_access_for_exam(current_user, exam.class_id, session)
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    return await build_exam_read(exam, session)
+
+@app.put("/exams/{exam_id}", response_model=ExamRead)
+async def update_exam(
+    exam_id: int,
+    exam_data: ExamUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Update exam details (name, dates).
+    Only allowed if exam status is DRAFT.
+    """
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Check access
+    if current_user.role == "TEACHER":
+        has_access = await check_class_access_for_exam(current_user, exam.class_id, session)
+        if not has_access or exam.created_by != current_user.user_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Only DRAFT exams can be edited
+    if exam.status != ExamStatus.DRAFT:
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot edit published exams. Unpublish first to make changes."
+        )
+    
+    # Update fields
+    if exam_data.name is not None:
+        exam.name = exam_data.name
+    
+    if exam_data.start_date is not None:
+        exam.start_date = exam_data.start_date
+    
+    if exam_data.end_date is not None:
+        exam.end_date = exam_data.end_date
+    
+    # Validate dates
+    if exam.end_date < exam.start_date:
+        raise HTTPException(status_code=400, detail="End date cannot be before start date")
+    
+    exam.updated_at = datetime.utcnow()
+    
+    session.add(exam)
+    await session.commit()
+    await session.refresh(exam)
+    
+    return await build_exam_read(exam, session)
+
+@app.delete("/exams/{exam_id}")
+async def delete_exam(
+    exam_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Delete an exam. Only allowed if:
+    - Exam is in DRAFT status
+    - User is the creator (for teachers) or Principal
+    """
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Check permissions
+    if current_user.role == "TEACHER":
+        if exam.created_by != current_user.user_id:
+            raise HTTPException(status_code=403, detail="You can only delete exams you created")
+    
+    # Only DRAFT exams can be deleted
+    if exam.status != ExamStatus.DRAFT:
+        raise HTTPException(status_code=400, detail="Cannot delete published exams")
+    
+    # Delete associated timetable entries first
+    entries_statement = select(ExamTimetableEntry).where(ExamTimetableEntry.exam_id == exam_id)
+    entries_result = await session.execute(entries_statement)
+    entries = entries_result.scalars().all()
+    
+    for entry in entries:
+        await session.delete(entry)
+    
+    # Delete exam
+    await session.delete(exam)
+    await session.commit()
+    
+    return {"message": "Exam deleted successfully"}
+
+@app.put("/exams/{exam_id}/publish")
+async def publish_exam(
+    exam_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Publish an exam (change status from DRAFT to PUBLISHED).
+    Validates that at least one subject is scheduled.
+    """
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Check access
+    if current_user.role == "TEACHER":
+        has_access = await check_class_access_for_exam(current_user, exam.class_id, session)
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    if exam.status == ExamStatus.PUBLISHED:
+        raise HTTPException(status_code=400, detail="Exam is already published")
+    
+    # Validate that exam has at least one subject
+    entries_statement = select(ExamTimetableEntry).where(ExamTimetableEntry.exam_id == exam_id)
+    entries_result = await session.execute(entries_statement)
+    entries = entries_result.scalars().all()
+    
+    if not entries:
+        raise HTTPException(
+            status_code=400, 
+            detail="Cannot publish exam without any subjects. Please add at least one subject."
+        )
+    
+    # Publish exam
+    exam.status = ExamStatus.PUBLISHED
+    exam.updated_at = datetime.utcnow()
+    
+    session.add(exam)
+    await session.commit()
+    
+    # Log activity
+    activity = ActivityLog(
+        school_id=current_user.school_id,
+        user_id=current_user.user_id,
+        action="exam_published",
+        description=f"Published exam: {exam.name}",
+        entity_type="exam",
+        entity_id=exam.id
+    )
+    session.add(activity)
+    await session.commit()
+    
+    return {"message": "Exam published successfully", "status": exam.status.value}
+
+@app.put("/exams/{exam_id}/unpublish")
+async def unpublish_exam(
+    exam_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(require_role(["PRINCIPAL", "ADMIN"]))
+):
+    """
+    Unpublish an exam (change status from PUBLISHED to DRAFT).
+    Only principals can unpublish exams.
+    """
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    if exam.status == ExamStatus.DRAFT:
+        raise HTTPException(status_code=400, detail="Exam is already in draft status")
+    
+    exam.status = ExamStatus.DRAFT
+    exam.updated_at = datetime.utcnow()
+    
+    session.add(exam)
+    await session.commit()
+    
+    return {"message": "Exam unpublished successfully", "status": exam.status.value}
+
+# --- Exam Timetable Entries ---
+
+@app.get("/exams/{exam_id}/timetable", response_model=List[ExamTimetableEntryRead])
+async def get_exam_timetable(
+    exam_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get all timetable entries (subjects) for an exam"""
+    # Verify exam exists and user has access
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Check access for teachers
+    if current_user.role == "TEACHER":
+        has_access = await check_class_access_for_exam(current_user, exam.class_id, session)
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Get all timetable entries
+    statement = select(ExamTimetableEntry).where(
+        ExamTimetableEntry.exam_id == exam_id
+    ).order_by(ExamTimetableEntry.exam_date, ExamTimetableEntry.start_time)
+    
+    result = await session.execute(statement)
+    entries = result.scalars().all()
+    
+    # Build response with subject info
+    response = []
+    for entry in entries:
+        subject = await session.get(Subject, entry.subject_id)
+        
+        response.append(ExamTimetableEntryRead(
+            id=entry.id,
+            exam_id=entry.exam_id,
+            subject_id=entry.subject_id,
+            subject_name=subject.name if subject else None,
+            subject_code=subject.code if subject else None,
+            exam_date=entry.exam_date,
+            start_time=entry.start_time,
+            end_time=entry.end_time,
+            max_marks=entry.max_marks,
+            created_at=entry.created_at
+        ))
+    
+    return response
+
+@app.post("/exams/{exam_id}/timetable", response_model=ExamTimetableEntryRead)
+async def add_exam_timetable_entry(
+    exam_id: int,
+    entry_data: ExamTimetableEntryCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Add a subject to exam timetable.
+    Validates that:
+    - Exam is in DRAFT status
+    - Date is within exam date range
+    - Subject is not already in this exam
+    - Start time < End time
+    """
+    # Verify exam exists and user has access
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Check access for teachers
+    if current_user.role == "TEACHER":
+        has_access = await check_class_access_for_exam(current_user, exam.class_id, session)
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Only DRAFT exams can be edited
+    if exam.status != ExamStatus.DRAFT:
+        raise HTTPException(status_code=400, detail="Cannot modify published exam timetable")
+    
+    # Validate date is within exam range
+    if entry_data.exam_date < exam.start_date or entry_data.exam_date > exam.end_date:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Exam date must be between {exam.start_date} and {exam.end_date}"
+        )
+    
+    # Validate time
+    if entry_data.start_time >= entry_data.end_time:
+        raise HTTPException(status_code=400, detail="Start time must be before end time")
+    
+    # Validate max marks
+    if entry_data.max_marks <= 0:
+        raise HTTPException(status_code=400, detail="Max marks must be greater than 0")
+    
+    # Verify subject exists
+    subject = await session.get(Subject, entry_data.subject_id)
+    if not subject or subject.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Subject not found")
+    
+    # Check if subject already exists in this exam
+    existing_statement = select(ExamTimetableEntry).where(
+        and_(
+            ExamTimetableEntry.exam_id == exam_id,
+            ExamTimetableEntry.subject_id == entry_data.subject_id
+        )
+    )
+    existing_result = await session.execute(existing_statement)
+    if existing_result.scalars().first():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Subject '{subject.name}' is already scheduled in this exam"
+        )
+    
+    # Create entry
+    entry = ExamTimetableEntry(
+        school_id=current_user.school_id,
+        exam_id=exam_id,
+        subject_id=entry_data.subject_id,
+        exam_date=entry_data.exam_date,
+        start_time=entry_data.start_time,
+        end_time=entry_data.end_time,
+        max_marks=entry_data.max_marks
+    )
+    
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    
+    return ExamTimetableEntryRead(
+        id=entry.id,
+        exam_id=entry.exam_id,
+        subject_id=entry.subject_id,
+        subject_name=subject.name,
+        subject_code=subject.code,
+        exam_date=entry.exam_date,
+        start_time=entry.start_time,
+        end_time=entry.end_time,
+        max_marks=entry.max_marks,
+        created_at=entry.created_at
+    )
+
+@app.put("/exams/{exam_id}/timetable/{entry_id}", response_model=ExamTimetableEntryRead)
+async def update_exam_timetable_entry(
+    exam_id: int,
+    entry_id: int,
+    entry_data: ExamTimetableEntryUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Update an exam timetable entry (date, time, max marks)"""
+    # Verify exam
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Check access
+    if current_user.role == "TEACHER":
+        has_access = await check_class_access_for_exam(current_user, exam.class_id, session)
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Only DRAFT exams can be edited
+    if exam.status != ExamStatus.DRAFT:
+        raise HTTPException(status_code=400, detail="Cannot modify published exam timetable")
+    
+    # Get entry
+    entry = await session.get(ExamTimetableEntry, entry_id)
+    
+    if not entry or entry.exam_id != exam_id:
+        raise HTTPException(status_code=404, detail="Timetable entry not found")
+    
+    # Update fields
+    if entry_data.exam_date is not None:
+        if entry_data.exam_date < exam.start_date or entry_data.exam_date > exam.end_date:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Exam date must be between {exam.start_date} and {exam.end_date}"
+            )
+        entry.exam_date = entry_data.exam_date
+    
+    if entry_data.start_time is not None:
+        entry.start_time = entry_data.start_time
+    
+    if entry_data.end_time is not None:
+        entry.end_time = entry_data.end_time
+    
+    # Validate time
+    if entry.start_time >= entry.end_time:
+        raise HTTPException(status_code=400, detail="Start time must be before end time")
+    
+    if entry_data.max_marks is not None:
+        if entry_data.max_marks <= 0:
+            raise HTTPException(status_code=400, detail="Max marks must be greater than 0")
+        entry.max_marks = entry_data.max_marks
+    
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    
+    # Get subject info
+    subject = await session.get(Subject, entry.subject_id)
+    
+    return ExamTimetableEntryRead(
+        id=entry.id,
+        exam_id=entry.exam_id,
+        subject_id=entry.subject_id,
+        subject_name=subject.name if subject else None,
+        subject_code=subject.code if subject else None,
+        exam_date=entry.exam_date,
+        start_time=entry.start_time,
+        end_time=entry.end_time,
+        max_marks=entry.max_marks,
+        created_at=entry.created_at
+    )
+
+@app.delete("/exams/{exam_id}/timetable/{entry_id}")
+async def delete_exam_timetable_entry(
+    exam_id: int,
+    entry_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Remove a subject from exam timetable"""
+    # Verify exam
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Check access
+    if current_user.role == "TEACHER":
+        has_access = await check_class_access_for_exam(current_user, exam.class_id, session)
+        if not has_access:
+            raise HTTPException(status_code=403, detail="Access denied")
+    
+    # Only DRAFT exams can be edited
+    if exam.status != ExamStatus.DRAFT:
+        raise HTTPException(status_code=400, detail="Cannot modify published exam timetable")
+    
+    # Get entry
+    entry = await session.get(ExamTimetableEntry, entry_id)
+    
+    if not entry or entry.exam_id != exam_id:
+        raise HTTPException(status_code=404, detail="Timetable entry not found")
+    
+    await session.delete(entry)
+    await session.commit()
+    
+    return {"message": "Subject removed from exam timetable"}
+
+# ===========================================
+# MARKS ENTRY MODULE
+# ===========================================
+
+async def check_marks_access(current_user: TokenData, exam: Exam, subject_id: int, session: AsyncSession) -> bool:
+    """Check if user has access to enter marks for this exam/subject combination"""
+    if current_user.role in ["PRINCIPAL", "ADMIN"]:
+        return True
+    
+    if current_user.role == "TEACHER":
+        # Check if teacher teaches this subject in this class
+        statement = select(TimetableEntry).where(
+            and_(
+                TimetableEntry.school_id == current_user.school_id,
+                TimetableEntry.class_id == exam.class_id,
+                TimetableEntry.subject_id == subject_id,
+                TimetableEntry.teacher_id == current_user.user_id
+            )
+        )
+        result = await session.execute(statement)
+        return result.scalars().first() is not None
+    
+    return False
+
+@app.get("/exams/{exam_id}/marks-summary", response_model=List[MarksSummary])
+async def get_exam_marks_summary(
+    exam_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Get marks entry status summary for all subjects in an exam.
+    Shows how many marks have been entered/published for each subject.
+    """
+    # Verify exam exists and user has access
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Only published exams can have marks entered
+    if exam.status != ExamStatus.PUBLISHED:
+        raise HTTPException(status_code=400, detail="Marks can only be entered for published exams")
+    
+    # Get class info
+    class_obj = await session.get(Class, exam.class_id)
+    
+    # Get total students in class
+    students_statement = select(Student).where(
+        and_(
+            Student.school_id == current_user.school_id,
+            Student.class_id == exam.class_id,
+            Student.is_active == True
+        )
+    )
+    students_result = await session.execute(students_statement)
+    total_students = len(students_result.scalars().all())
+    
+    # Get all timetable entries for this exam
+    entries_statement = select(ExamTimetableEntry).where(
+        ExamTimetableEntry.exam_id == exam_id
+    ).order_by(ExamTimetableEntry.exam_date)
+    
+    entries_result = await session.execute(entries_statement)
+    entries = entries_result.scalars().all()
+    
+    summaries = []
+    for entry in entries:
+        subject = await session.get(Subject, entry.subject_id)
+        
+        # Count marks for this entry
+        marks_statement = select(Mark).where(
+            Mark.exam_timetable_entry_id == entry.id
+        )
+        marks_result = await session.execute(marks_statement)
+        marks = marks_result.scalars().all()
+        
+        marks_entered = len([m for m in marks if m.marks_obtained is not None or m.is_absent])
+        marks_published = len([m for m in marks if m.status == MarkStatus.PUBLISHED])
+        
+        # Determine status
+        if marks_published > 0:
+            status = "Published"
+        elif marks_entered == total_students:
+            status = "Completed"
+        elif marks_entered > 0:
+            status = "In Progress"
+        else:
+            status = "Pending"
+        
+        # Check access for teacher
+        can_access = await check_marks_access(current_user, exam, entry.subject_id, session)
+        
+        if can_access or current_user.role in ["PRINCIPAL", "ADMIN"]:
+            summaries.append(MarksSummary(
+                exam_id=exam_id,
+                exam_name=exam.name,
+                exam_timetable_entry_id=entry.id,
+                subject_id=entry.subject_id,
+                subject_name=subject.name if subject else "Unknown",
+                max_marks=entry.max_marks,
+                total_students=total_students,
+                marks_entered=marks_entered,
+                marks_published=marks_published,
+                status=status
+            ))
+    
+    return summaries
+
+@app.get("/exams/{exam_id}/marks/{entry_id}", response_model=MarksEntryResponse)
+async def get_marks_for_entry(
+    exam_id: int,
+    entry_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Get all marks for a specific exam timetable entry (subject).
+    Returns student list with their marks for marks entry page.
+    """
+    # Verify exam exists
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    if exam.status != ExamStatus.PUBLISHED:
+        raise HTTPException(status_code=400, detail="Marks can only be entered for published exams")
+    
+    # Verify entry exists
+    entry = await session.get(ExamTimetableEntry, entry_id)
+    
+    if not entry or entry.exam_id != exam_id:
+        raise HTTPException(status_code=404, detail="Timetable entry not found")
+    
+    # Check access
+    has_access = await check_marks_access(current_user, exam, entry.subject_id, session)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="You don't have permission to access marks for this subject")
+    
+    # Get class and subject info
+    class_obj = await session.get(Class, exam.class_id)
+    subject = await session.get(Subject, entry.subject_id)
+    
+    # Get all students in the class
+    students_statement = select(Student).where(
+        and_(
+            Student.school_id == current_user.school_id,
+            Student.class_id == exam.class_id,
+            Student.is_active == True
+        )
+    ).order_by(Student.name)
+    
+    students_result = await session.execute(students_statement)
+    students = students_result.scalars().all()
+    
+    # Get existing marks for this entry
+    marks_statement = select(Mark).where(
+        Mark.exam_timetable_entry_id == entry_id
+    )
+    marks_result = await session.execute(marks_statement)
+    existing_marks = {m.student_id: m for m in marks_result.scalars().all()}
+    
+    # Build response with marks for each student
+    marks_list = []
+    marks_entered_count = 0
+    overall_status = "Pending"
+    
+    for student in students:
+        if student.id in existing_marks:
+            mark = existing_marks[student.id]
+            entered_by_user = await session.get(User, mark.entered_by)
+            
+            marks_list.append(MarkRead(
+                id=mark.id,
+                exam_id=exam_id,
+                exam_timetable_entry_id=entry_id,
+                student_id=student.id,
+                subject_id=entry.subject_id,
+                student_name=student.name,
+                student_admission_number=student.admission_number,
+                marks_obtained=mark.marks_obtained,
+                max_marks=entry.max_marks,
+                is_absent=mark.is_absent,
+                remarks=mark.remarks,
+                status=mark.status,
+                entered_by=mark.entered_by,
+                entered_by_name=entered_by_user.name if entered_by_user else None,
+                created_at=mark.created_at,
+                updated_at=mark.updated_at
+            ))
+            
+            if mark.marks_obtained is not None or mark.is_absent:
+                marks_entered_count += 1
+            if mark.status == MarkStatus.PUBLISHED:
+                overall_status = "Published"
+        else:
+            # Create placeholder for students without marks
+            marks_list.append(MarkRead(
+                id=0,  # Placeholder
+                exam_id=exam_id,
+                exam_timetable_entry_id=entry_id,
+                student_id=student.id,
+                subject_id=entry.subject_id,
+                student_name=student.name,
+                student_admission_number=student.admission_number,
+                marks_obtained=None,
+                max_marks=entry.max_marks,
+                is_absent=False,
+                remarks=None,
+                status=MarkStatus.DRAFT,
+                entered_by=0,
+                entered_by_name=None,
+                created_at=datetime.utcnow(),
+                updated_at=datetime.utcnow()
+            ))
+    
+    # Determine overall status
+    if overall_status != "Published":
+        if marks_entered_count == len(students):
+            overall_status = "Completed"
+        elif marks_entered_count > 0:
+            overall_status = "In Progress"
+    
+    return MarksEntryResponse(
+        exam_id=exam_id,
+        exam_name=exam.name,
+        exam_timetable_entry_id=entry_id,
+        subject_id=entry.subject_id,
+        subject_name=subject.name if subject else "Unknown",
+        max_marks=entry.max_marks,
+        class_id=exam.class_id,
+        class_name=f"{class_obj.grade}-{class_obj.section}" if class_obj else "Unknown",
+        status=overall_status,
+        total_students=len(students),
+        marks_entered=marks_entered_count,
+        marks=marks_list
+    )
+
+@app.post("/marks/bulk", response_model=dict)
+async def bulk_save_marks(
+    data: MarkBulkEntry,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Bulk save marks for multiple students at once.
+    Creates new marks or updates existing ones.
+    Validates marks don't exceed max marks.
+    """
+    # Verify exam
+    exam = await session.get(Exam, data.exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    if exam.status != ExamStatus.PUBLISHED:
+        raise HTTPException(status_code=400, detail="Marks can only be entered for published exams")
+    
+    # Verify entry
+    entry = await session.get(ExamTimetableEntry, data.exam_timetable_entry_id)
+    
+    if not entry or entry.exam_id != data.exam_id:
+        raise HTTPException(status_code=404, detail="Timetable entry not found")
+    
+    # Check access
+    has_access = await check_marks_access(current_user, exam, entry.subject_id, session)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="You don't have permission to enter marks for this subject")
+    
+    # Process each mark
+    created_count = 0
+    updated_count = 0
+    errors = []
+    
+    for mark_data in data.marks:
+        # Validate student exists and belongs to the class
+        student = await session.get(Student, mark_data.student_id)
+        if not student or student.class_id != exam.class_id:
+            errors.append(f"Student {mark_data.student_id} not found in this class")
+            continue
+        
+        # Validate marks don't exceed max
+        if mark_data.marks_obtained is not None:
+            if mark_data.marks_obtained < 0:
+                errors.append(f"Marks for {student.name} cannot be negative")
+                continue
+            if mark_data.marks_obtained > entry.max_marks:
+                errors.append(f"Marks for {student.name} exceed maximum ({entry.max_marks})")
+                continue
+        
+        # Check if mark already exists
+        existing_statement = select(Mark).where(
+            and_(
+                Mark.exam_timetable_entry_id == entry.id,
+                Mark.student_id == mark_data.student_id
+            )
+        )
+        existing_result = await session.execute(existing_statement)
+        existing_mark = existing_result.scalars().first()
+        
+        if existing_mark:
+            # Update existing mark
+            existing_mark.marks_obtained = mark_data.marks_obtained
+            existing_mark.is_absent = mark_data.is_absent
+            existing_mark.remarks = mark_data.remarks
+            existing_mark.updated_at = datetime.utcnow()
+            session.add(existing_mark)
+            updated_count += 1
+        else:
+            # Create new mark
+            new_mark = Mark(
+                school_id=current_user.school_id,
+                exam_id=data.exam_id,
+                exam_timetable_entry_id=entry.id,
+                student_id=mark_data.student_id,
+                subject_id=entry.subject_id,
+                marks_obtained=mark_data.marks_obtained,
+                is_absent=mark_data.is_absent,
+                remarks=mark_data.remarks,
+                status=MarkStatus.DRAFT,
+                entered_by=current_user.user_id
+            )
+            session.add(new_mark)
+            created_count += 1
+    
+    await session.commit()
+    
+    # Log activity
+    subject = await session.get(Subject, entry.subject_id)
+    activity = ActivityLog(
+        school_id=current_user.school_id,
+        user_id=current_user.user_id,
+        action="marks_entered",
+        description=f"Entered marks for {subject.name if subject else 'Unknown'} in {exam.name}",
+        entity_type="mark",
+        entity_id=entry.id
+    )
+    session.add(activity)
+    await session.commit()
+    
+    return {
+        "message": "Marks saved successfully",
+        "created": created_count,
+        "updated": updated_count,
+        "errors": errors if errors else None
+    }
+
+@app.patch("/marks/{mark_id}", response_model=MarkRead)
+async def update_single_mark(
+    mark_id: int,
+    data: MarkUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Update a single mark.
+    Teachers can edit marks even after publishing.
+    """
+    # Get the mark
+    mark = await session.get(Mark, mark_id)
+    
+    if not mark or mark.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Mark not found")
+    
+    # Get exam and entry for validation
+    exam = await session.get(Exam, mark.exam_id)
+    entry = await session.get(ExamTimetableEntry, mark.exam_timetable_entry_id)
+    
+    # Check access
+    has_access = await check_marks_access(current_user, exam, mark.subject_id, session)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="You don't have permission to edit this mark")
+    
+    # Validate marks
+    if data.marks_obtained is not None:
+        if data.marks_obtained < 0:
+            raise HTTPException(status_code=400, detail="Marks cannot be negative")
+        if data.marks_obtained > entry.max_marks:
+            raise HTTPException(status_code=400, detail=f"Marks cannot exceed {entry.max_marks}")
+        mark.marks_obtained = data.marks_obtained
+    
+    if data.is_absent is not None:
+        mark.is_absent = data.is_absent
+        if data.is_absent:
+            mark.marks_obtained = None  # Clear marks if marked absent
+    
+    if data.remarks is not None:
+        mark.remarks = data.remarks
+    
+    mark.updated_at = datetime.utcnow()
+    
     session.add(mark)
     await session.commit()
     await session.refresh(mark)
-    return mark
+    
+    # Get related info for response
+    student = await session.get(Student, mark.student_id)
+    entered_by_user = await session.get(User, mark.entered_by)
+    
+    return MarkRead(
+        id=mark.id,
+        exam_id=mark.exam_id,
+        exam_timetable_entry_id=mark.exam_timetable_entry_id,
+        student_id=mark.student_id,
+        subject_id=mark.subject_id,
+        student_name=student.name if student else None,
+        student_admission_number=student.admission_number if student else None,
+        marks_obtained=mark.marks_obtained,
+        max_marks=entry.max_marks,
+        is_absent=mark.is_absent,
+        remarks=mark.remarks,
+        status=mark.status,
+        entered_by=mark.entered_by,
+        entered_by_name=entered_by_user.name if entered_by_user else None,
+        created_at=mark.created_at,
+        updated_at=mark.updated_at
+    )
 
-@app.get("/marks/", response_model=List[Mark])
-async def list_marks(session: AsyncSession = Depends(get_session)):
-    statement = select(Mark)
-    result = await session.execute(statement)
-    return result.scalars().all()
+@app.post("/marks/publish", response_model=dict)
+async def publish_marks(
+    data: MarksPublishRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Publish all marks for a specific exam subject.
+    Changes status from DRAFT to PUBLISHED.
+    Makes marks visible to students/parents.
+    """
+    # Verify exam
+    exam = await session.get(Exam, data.exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Verify entry
+    entry = await session.get(ExamTimetableEntry, data.exam_timetable_entry_id)
+    
+    if not entry or entry.exam_id != data.exam_id:
+        raise HTTPException(status_code=404, detail="Timetable entry not found")
+    
+    # Check access
+    has_access = await check_marks_access(current_user, exam, entry.subject_id, session)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="You don't have permission to publish marks for this subject")
+    
+    # Get all marks for this entry
+    marks_statement = select(Mark).where(
+        and_(
+            Mark.exam_timetable_entry_id == entry.id,
+            Mark.status == MarkStatus.DRAFT
+        )
+    )
+    marks_result = await session.execute(marks_statement)
+    marks = marks_result.scalars().all()
+    
+    if not marks:
+        raise HTTPException(status_code=400, detail="No draft marks to publish")
+    
+    # Update all marks to published
+    published_count = 0
+    for mark in marks:
+        mark.status = MarkStatus.PUBLISHED
+        mark.updated_at = datetime.utcnow()
+        session.add(mark)
+        published_count += 1
+    
+    await session.commit()
+    
+    # Log activity
+    subject = await session.get(Subject, entry.subject_id)
+    activity = ActivityLog(
+        school_id=current_user.school_id,
+        user_id=current_user.user_id,
+        action="marks_published",
+        description=f"Published marks for {subject.name if subject else 'Unknown'} in {exam.name}",
+        entity_type="mark",
+        entity_id=entry.id
+    )
+    session.add(activity)
+    await session.commit()
+    
+    return {
+        "message": "Marks published successfully",
+        "published_count": published_count
+    }
+
+@app.post("/marks/unpublish", response_model=dict)
+async def unpublish_marks(
+    data: MarksPublishRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(require_role(["PRINCIPAL", "ADMIN"]))
+):
+    """
+    Unpublish marks (revert to draft). Only principals can do this.
+    Allows teachers to make corrections after publish.
+    """
+    # Verify exam
+    exam = await session.get(Exam, data.exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Verify entry
+    entry = await session.get(ExamTimetableEntry, data.exam_timetable_entry_id)
+    
+    if not entry or entry.exam_id != data.exam_id:
+        raise HTTPException(status_code=404, detail="Timetable entry not found")
+    
+    # Get all published marks for this entry
+    marks_statement = select(Mark).where(
+        and_(
+            Mark.exam_timetable_entry_id == entry.id,
+            Mark.status == MarkStatus.PUBLISHED
+        )
+    )
+    marks_result = await session.execute(marks_statement)
+    marks = marks_result.scalars().all()
+    
+    if not marks:
+        raise HTTPException(status_code=400, detail="No published marks to unpublish")
+    
+    # Revert all marks to draft
+    unpublished_count = 0
+    for mark in marks:
+        mark.status = MarkStatus.DRAFT
+        mark.updated_at = datetime.utcnow()
+        session.add(mark)
+        unpublished_count += 1
+    
+    await session.commit()
+    
+    return {
+        "message": "Marks unpublished successfully",
+        "unpublished_count": unpublished_count
+    }
+
+@app.delete("/marks/{mark_id}", response_model=dict)
+async def delete_mark(
+    mark_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Delete a single mark entry"""
+    mark = await session.get(Mark, mark_id)
+    
+    if not mark or mark.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Mark not found")
+    
+    # Get exam for access check
+    exam = await session.get(Exam, mark.exam_id)
+    
+    # Check access
+    has_access = await check_marks_access(current_user, exam, mark.subject_id, session)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="You don't have permission to delete this mark")
+    
+    await session.delete(mark)
+    await session.commit()
+    
+    return {"message": "Mark deleted successfully"}
+
+@app.get("/exams/{exam_id}/analytics", response_model=dict)
+async def get_exam_analytics(
+    exam_id: int,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """
+    Get analytics for an exam - class average, subject-wise performance, pass percentage.
+    Phase 3 enhancement.
+    """
+    # Verify exam
+    exam = await session.get(Exam, exam_id)
+    
+    if not exam or exam.school_id != current_user.school_id:
+        raise HTTPException(status_code=404, detail="Exam not found")
+    
+    # Get all timetable entries
+    entries_statement = select(ExamTimetableEntry).where(
+        ExamTimetableEntry.exam_id == exam_id
+    )
+    entries_result = await session.execute(entries_statement)
+    entries = entries_result.scalars().all()
+    
+    # Calculate analytics for each subject
+    subject_analytics = []
+    total_marks_all = 0
+    total_max_all = 0
+    all_students_set = set()
+    
+    for entry in entries:
+        subject = await session.get(Subject, entry.subject_id)
+        
+        # Get marks for this entry
+        marks_statement = select(Mark).where(
+            and_(
+                Mark.exam_timetable_entry_id == entry.id,
+                Mark.is_absent == False,
+                Mark.marks_obtained.isnot(None)
+            )
+        )
+        marks_result = await session.execute(marks_statement)
+        marks = marks_result.scalars().all()
+        
+        if marks:
+            total_obtained = sum(m.marks_obtained for m in marks)
+            total_max = entry.max_marks * len(marks)
+            average = total_obtained / len(marks)
+            highest = max(m.marks_obtained for m in marks)
+            lowest = min(m.marks_obtained for m in marks)
+            pass_count = sum(1 for m in marks if m.marks_obtained >= (entry.max_marks * exam.pass_percentage / 100))  # Dynamic pass %
+            pass_percentage = (pass_count / len(marks)) * 100
+            
+            total_marks_all += total_obtained
+            total_max_all += total_max
+            
+            for m in marks:
+                all_students_set.add(m.student_id)
+            
+            subject_analytics.append({
+                "subject_id": entry.subject_id,
+                "subject_name": subject.name if subject else "Unknown",
+                "max_marks": entry.max_marks,
+                "students_appeared": len(marks),
+                "average": round(average, 2),
+                "highest": highest,
+                "lowest": lowest,
+                "pass_percentage": round(pass_percentage, 2)
+            })
+    
+    # Overall class analytics
+    overall_average = (total_marks_all / total_max_all * 100) if total_max_all > 0 else 0
+    
+    return {
+        "exam_id": exam_id,
+        "exam_name": exam.name,
+        "total_subjects": len(entries),
+        "total_students_appeared": len(all_students_set),
+        "overall_average_percentage": round(overall_average, 2),
+        "subject_wise": subject_analytics
+    }
+
+
+
 
 # --- Communications & AI ---
 @app.post("/communications/", response_model=Communication)
