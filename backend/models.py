@@ -119,7 +119,8 @@ class User(SQLModel, table=True):
     password_hash: str
     role: UserRole
     date_of_birth: Optional[date] = None
-    assigned_classes: Optional[List[str]] = Field(default=None, sa_column=Column(JSON)) # List of Class IDs
+    assigned_classes: Optional[List[str]] = Field(default=None, sa_column=Column(JSON))  # List of Class IDs
+    preferences: Optional[dict] = Field(default_factory=dict, sa_column=Column(JSON))  # User preferences
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 # --- Auth Request Models (Pydantic only, not DB tables) ---
@@ -566,3 +567,80 @@ class ActivityLog(SQLModel, table=True):
     entity_type: Optional[str] = None  # "student", "leave", "timetable", etc.
     entity_id: Optional[int] = None  # ID of the affected entity
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+# --- Settings Models (Pydantic only, stored in School.settings JSON) ---
+
+class SchoolProfileUpdate(SQLModel):
+    """Update school profile information"""
+    name: Optional[str] = None
+    address: Optional[str] = None
+    contact_email: Optional[EmailStr] = None
+    contact_phone: Optional[str] = None
+
+class SchoolProfileRead(SQLModel):
+    """Read school profile information"""
+    id: int
+    name: str
+    address: str
+    contact_email: str
+    contact_phone: str
+
+class CommunicationSettings(SQLModel):
+    """Communication channel settings stored in School.settings"""
+    whatsapp_connected: bool = False
+    whatsapp_number: Optional[str] = None
+    sms_sender_id: Optional[str] = None
+    twilio_account_sid: Optional[str] = None
+    twilio_auth_token: Optional[str] = None  # Will be masked in responses
+
+class DailySummarySections(SQLModel):
+    """Sections to include in daily summary report"""
+    attendance: bool = True
+    fees: bool = True
+    academics: bool = True
+    staff: bool = False
+
+class DailySummarySettings(SQLModel):
+    """Daily summary report settings stored in School.settings"""
+    enabled: bool = False
+    time: str = "17:00"  # 24-hour format
+    sections: DailySummarySections = DailySummarySections()
+
+class SchoolSettingsRead(SQLModel):
+    """Combined settings response for frontend"""
+    school_profile: SchoolProfileRead
+    communication: CommunicationSettings
+    daily_summary: DailySummarySettings
+
+
+# --- Teacher Settings Models ---
+
+class TeacherProfileRead(SQLModel):
+    """Read teacher profile information"""
+    id: int
+    name: str
+    email: str
+    date_of_birth: Optional[date] = None
+    assigned_classes: List[dict] = []  # List of {id, name} for assigned classes
+
+class TeacherProfileUpdate(SQLModel):
+    """Update teacher profile - limited fields"""
+    name: Optional[str] = None
+    date_of_birth: Optional[date] = None
+
+class TeacherDailySummarySections(SQLModel):
+    """Sections for teacher's personal daily summary"""
+    my_schedule: bool = True
+    my_attendance: bool = True
+    my_leaves: bool = True
+
+class TeacherDailySummarySettings(SQLModel):
+    """Teacher's personal daily summary settings"""
+    enabled: bool = False
+    time: str = "17:00"
+    sections: TeacherDailySummarySections = TeacherDailySummarySections()
+
+class TeacherSettingsRead(SQLModel):
+    """Combined settings response for teacher"""
+    profile: TeacherProfileRead
+    daily_summary: TeacherDailySummarySettings
