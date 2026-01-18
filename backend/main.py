@@ -13,7 +13,11 @@ from models import (
     ExamCreate, ExamUpdate, ExamRead, ExamTimetableEntry, ExamTimetableEntryCreate, 
     ExamTimetableEntryUpdate, ExamTimetableEntryRead, ExamStatus,
     MarkStatus, MarkCreate, MarkUpdate, MarkBulkEntry, MarkRead, 
-    MarksEntryResponse, MarksPublishRequest, MarksSummary
+    MarksEntryResponse, MarksPublishRequest, MarksSummary,
+    SchoolProfileUpdate, SchoolProfileRead, CommunicationSettings, 
+    DailySummarySections, DailySummarySettings, SchoolSettingsRead,
+    TeacherProfileRead, TeacherProfileUpdate, TeacherDailySummarySections,
+    TeacherDailySummarySettings, TeacherSettingsRead
 )
 from auth_utils import get_password_hash, verify_password, create_access_token, get_current_user, require_role, TokenData
 from typing import List, Optional
@@ -3608,3 +3612,517 @@ async def create_activity_log(
     
     return {"message": "Activity logged successfully", "id": activity.id}
 
+
+# --- Settings API ---
+
+@app.get("/settings/school-profile", response_model=SchoolProfileRead)
+async def get_school_profile(
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get the school profile for the current user's school."""
+    statement = select(School).where(School.id == current_user.school_id)
+    result = await session.execute(statement)
+    school = result.scalars().first()
+    
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    
+    return SchoolProfileRead(
+        id=school.id,
+        name=school.name,
+        address=school.address,
+        contact_email=school.contact_email,
+        contact_phone=school.contact_phone
+    )
+
+
+@app.put("/settings/school-profile", response_model=SchoolProfileRead)
+async def update_school_profile(
+    profile_data: SchoolProfileUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(require_role(["PRINCIPAL"]))
+):
+    """Update the school profile (Principal only)."""
+    statement = select(School).where(School.id == current_user.school_id)
+    result = await session.execute(statement)
+    school = result.scalars().first()
+    
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    
+    # Update only provided fields
+    update_data = profile_data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(school, key, value)
+    
+    session.add(school)
+    await session.commit()
+    await session.refresh(school)
+    
+    # Log activity
+    activity = ActivityLog(
+        school_id=current_user.school_id,
+        user_id=current_user.user_id,
+        action="school_profile_updated",
+        description="Updated school profile",
+        entity_type="school",
+        entity_id=school.id
+    )
+    session.add(activity)
+    await session.commit()
+    
+    return SchoolProfileRead(
+        id=school.id,
+        name=school.name,
+        address=school.address,
+        contact_email=school.contact_email,
+        contact_phone=school.contact_phone
+    )
+
+
+@app.get("/settings/communication", response_model=CommunicationSettings)
+async def get_communication_settings(
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get communication channel settings for the current user's school."""
+    statement = select(School).where(School.id == current_user.school_id)
+    result = await session.execute(statement)
+    school = result.scalars().first()
+    
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    
+    settings = school.settings or {}
+    comm_settings = settings.get("communication", {})
+    
+    # Mask the auth token for security
+    response = CommunicationSettings(
+        whatsapp_connected=comm_settings.get("whatsapp_connected", False),
+        whatsapp_number=comm_settings.get("whatsapp_number"),
+        sms_sender_id=comm_settings.get("sms_sender_id"),
+        twilio_account_sid=comm_settings.get("twilio_account_sid"),
+        twilio_auth_token="********" if comm_settings.get("twilio_auth_token") else None
+    )
+    
+    return response
+
+
+@app.put("/settings/communication", response_model=CommunicationSettings)
+async def update_communication_settings(
+    comm_data: CommunicationSettings,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(require_role(["PRINCIPAL"]))
+):
+    """Update communication channel settings (Principal only)."""
+    statement = select(School).where(School.id == current_user.school_id)
+    result = await session.execute(statement)
+    school = result.scalars().first()
+    
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    
+    # Initialize settings if None
+    if school.settings is None:
+        school.settings = {}
+    
+    # Get existing communication settings
+    existing_comm = school.settings.get("communication", {})
+    
+    # Update communication settings
+    new_comm = {
+        "whatsapp_connected": comm_data.whatsapp_connected,
+        "whatsapp_number": comm_data.whatsapp_number,
+        "sms_sender_id": comm_data.sms_sender_id,
+        "twilio_account_sid": comm_data.twilio_account_sid,
+    }
+    
+    # Only update auth token if it's not the masked value
+    if comm_data.twilio_auth_token and comm_data.twilio_auth_token != "********":
+        new_comm["twilio_auth_token"] = comm_data.twilio_auth_token
+    else:
+        # Keep existing token if masked value sent
+        new_comm["twilio_auth_token"] = existing_comm.get("twilio_auth_token")
+    
+    # Update school settings (need to create new dict to trigger SQLAlchemy change detection)
+    updated_settings = {**school.settings, "communication": new_comm}
+    school.settings = updated_settings
+    
+    session.add(school)
+    await session.commit()
+    await session.refresh(school)
+    
+    # Log activity
+    activity = ActivityLog(
+        school_id=current_user.school_id,
+        user_id=current_user.user_id,
+        action="communication_settings_updated",
+        description="Updated communication settings",
+        entity_type="school",
+        entity_id=school.id
+    )
+    session.add(activity)
+    await session.commit()
+    
+    # Return masked response
+    return CommunicationSettings(
+        whatsapp_connected=new_comm["whatsapp_connected"],
+        whatsapp_number=new_comm["whatsapp_number"],
+        sms_sender_id=new_comm["sms_sender_id"],
+        twilio_account_sid=new_comm["twilio_account_sid"],
+        twilio_auth_token="********" if new_comm.get("twilio_auth_token") else None
+    )
+
+
+@app.get("/settings/daily-summary", response_model=DailySummarySettings)
+async def get_daily_summary_settings(
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get daily summary report settings for the current user's school."""
+    statement = select(School).where(School.id == current_user.school_id)
+    result = await session.execute(statement)
+    school = result.scalars().first()
+    
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    
+    settings = school.settings or {}
+    summary_settings = settings.get("daily_summary", {})
+    
+    sections_data = summary_settings.get("sections", {})
+    sections = DailySummarySections(
+        attendance=sections_data.get("attendance", True),
+        fees=sections_data.get("fees", True),
+        academics=sections_data.get("academics", True),
+        staff=sections_data.get("staff", False)
+    )
+    
+    return DailySummarySettings(
+        enabled=summary_settings.get("enabled", False),
+        time=summary_settings.get("time", "17:00"),
+        sections=sections
+    )
+
+
+@app.put("/settings/daily-summary", response_model=DailySummarySettings)
+async def update_daily_summary_settings(
+    summary_data: DailySummarySettings,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(require_role(["PRINCIPAL"]))
+):
+    """Update daily summary report settings (Principal only)."""
+    statement = select(School).where(School.id == current_user.school_id)
+    result = await session.execute(statement)
+    school = result.scalars().first()
+    
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    
+    # Initialize settings if None
+    if school.settings is None:
+        school.settings = {}
+    
+    # Convert sections to dict
+    sections_dict = {
+        "attendance": summary_data.sections.attendance,
+        "fees": summary_data.sections.fees,
+        "academics": summary_data.sections.academics,
+        "staff": summary_data.sections.staff
+    }
+    
+    # Build daily summary settings
+    new_summary = {
+        "enabled": summary_data.enabled,
+        "time": summary_data.time,
+        "sections": sections_dict
+    }
+    
+    # Update school settings (create new dict to trigger change detection)
+    updated_settings = {**school.settings, "daily_summary": new_summary}
+    school.settings = updated_settings
+    
+    session.add(school)
+    await session.commit()
+    await session.refresh(school)
+    
+    # Log activity
+    activity = ActivityLog(
+        school_id=current_user.school_id,
+        user_id=current_user.user_id,
+        action="daily_summary_settings_updated",
+        description=f"{'Enabled' if summary_data.enabled else 'Disabled'} daily summary report",
+        entity_type="school",
+        entity_id=school.id
+    )
+    session.add(activity)
+    await session.commit()
+    
+    return summary_data
+
+
+@app.get("/settings/all", response_model=SchoolSettingsRead)
+async def get_all_settings(
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get all settings at once for the settings page."""
+    statement = select(School).where(School.id == current_user.school_id)
+    result = await session.execute(statement)
+    school = result.scalars().first()
+    
+    if not school:
+        raise HTTPException(status_code=404, detail="School not found")
+    
+    settings = school.settings or {}
+    
+    # School Profile
+    school_profile = SchoolProfileRead(
+        id=school.id,
+        name=school.name,
+        address=school.address,
+        contact_email=school.contact_email,
+        contact_phone=school.contact_phone
+    )
+    
+    # Communication Settings
+    comm_settings = settings.get("communication", {})
+    communication = CommunicationSettings(
+        whatsapp_connected=comm_settings.get("whatsapp_connected", False),
+        whatsapp_number=comm_settings.get("whatsapp_number"),
+        sms_sender_id=comm_settings.get("sms_sender_id"),
+        twilio_account_sid=comm_settings.get("twilio_account_sid"),
+        twilio_auth_token="********" if comm_settings.get("twilio_auth_token") else None
+    )
+    
+    # Daily Summary Settings
+    summary_settings = settings.get("daily_summary", {})
+    sections_data = summary_settings.get("sections", {})
+    daily_summary = DailySummarySettings(
+        enabled=summary_settings.get("enabled", False),
+        time=summary_settings.get("time", "17:00"),
+        sections=DailySummarySections(
+            attendance=sections_data.get("attendance", True),
+            fees=sections_data.get("fees", True),
+            academics=sections_data.get("academics", True),
+            staff=sections_data.get("staff", False)
+        )
+    )
+    
+    return SchoolSettingsRead(
+        school_profile=school_profile,
+        communication=communication,
+        daily_summary=daily_summary
+    )
+
+
+# --- Teacher Settings API ---
+
+@app.get("/settings/teacher/profile", response_model=TeacherProfileRead)
+async def get_teacher_profile(
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get the current user's profile."""
+    statement = select(User).where(User.id == current_user.user_id)
+    result = await session.execute(statement)
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Get assigned classes with names
+    assigned_classes = []
+    if user.assigned_classes:
+        for class_id in user.assigned_classes:
+            class_stmt = select(Class).where(Class.id == int(class_id))
+            class_result = await session.execute(class_stmt)
+            class_obj = class_result.scalars().first()
+            if class_obj:
+                assigned_classes.append({
+                    "id": class_obj.id,
+                    "name": f"{class_obj.grade}-{class_obj.section}"
+                })
+    
+    return TeacherProfileRead(
+        id=user.id,
+        name=user.name,
+        email=user.email,
+        date_of_birth=user.date_of_birth,
+        assigned_classes=assigned_classes
+    )
+
+
+@app.put("/settings/teacher/profile", response_model=TeacherProfileRead)
+async def update_teacher_profile(
+    profile_data: TeacherProfileUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Update the current user's profile (limited fields)."""
+    statement = select(User).where(User.id == current_user.user_id)
+    result = await session.execute(statement)
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Update only allowed fields
+    if profile_data.name is not None:
+        user.name = profile_data.name
+    if profile_data.date_of_birth is not None:
+        user.date_of_birth = profile_data.date_of_birth
+    
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    
+    # Get assigned classes with names
+    assigned_classes = []
+    if user.assigned_classes:
+        for class_id in user.assigned_classes:
+            class_stmt = select(Class).where(Class.id == int(class_id))
+            class_result = await session.execute(class_stmt)
+            class_obj = class_result.scalars().first()
+            if class_obj:
+                assigned_classes.append({
+                    "id": class_obj.id,
+                    "name": f"{class_obj.grade}-{class_obj.section}"
+                })
+    
+    return TeacherProfileRead(
+        id=user.id,
+        name=user.name,
+        email=user.email,
+        date_of_birth=user.date_of_birth,
+        assigned_classes=assigned_classes
+    )
+
+
+@app.get("/settings/teacher/daily-summary", response_model=TeacherDailySummarySettings)
+async def get_teacher_daily_summary(
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get the teacher's personal daily summary settings."""
+    statement = select(User).where(User.id == current_user.user_id)
+    result = await session.execute(statement)
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    preferences = user.preferences or {}
+    summary_settings = preferences.get("daily_summary", {})
+    sections_data = summary_settings.get("sections", {})
+    
+    sections = TeacherDailySummarySections(
+        my_schedule=sections_data.get("my_schedule", True),
+        my_attendance=sections_data.get("my_attendance", True),
+        my_leaves=sections_data.get("my_leaves", True)
+    )
+    
+    return TeacherDailySummarySettings(
+        enabled=summary_settings.get("enabled", False),
+        time=summary_settings.get("time", "17:00"),
+        sections=sections
+    )
+
+
+@app.put("/settings/teacher/daily-summary", response_model=TeacherDailySummarySettings)
+async def update_teacher_daily_summary(
+    summary_data: TeacherDailySummarySettings,
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Update the teacher's personal daily summary settings."""
+    statement = select(User).where(User.id == current_user.user_id)
+    result = await session.execute(statement)
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Initialize preferences if None
+    if user.preferences is None:
+        user.preferences = {}
+    
+    # Build daily summary settings
+    sections_dict = {
+        "my_schedule": summary_data.sections.my_schedule,
+        "my_attendance": summary_data.sections.my_attendance,
+        "my_leaves": summary_data.sections.my_leaves
+    }
+    
+    new_summary = {
+        "enabled": summary_data.enabled,
+        "time": summary_data.time,
+        "sections": sections_dict
+    }
+    
+    # Update user preferences (create new dict for change detection)
+    updated_preferences = {**user.preferences, "daily_summary": new_summary}
+    user.preferences = updated_preferences
+    
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+    
+    return summary_data
+
+
+@app.get("/settings/teacher/all", response_model=TeacherSettingsRead)
+async def get_all_teacher_settings(
+    session: AsyncSession = Depends(get_session),
+    current_user: TokenData = Depends(get_current_user)
+):
+    """Get all settings at once for the teacher settings page."""
+    statement = select(User).where(User.id == current_user.user_id)
+    result = await session.execute(statement)
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Get assigned classes with names
+    assigned_classes = []
+    if user.assigned_classes:
+        for class_id in user.assigned_classes:
+            class_stmt = select(Class).where(Class.id == int(class_id))
+            class_result = await session.execute(class_stmt)
+            class_obj = class_result.scalars().first()
+            if class_obj:
+                assigned_classes.append({
+                    "id": class_obj.id,
+                    "name": f"{class_obj.grade}-{class_obj.section}"
+                })
+    
+    # Profile
+    profile = TeacherProfileRead(
+        id=user.id,
+        name=user.name,
+        email=user.email,
+        date_of_birth=user.date_of_birth,
+        assigned_classes=assigned_classes
+    )
+    
+    # Daily Summary
+    preferences = user.preferences or {}
+    summary_settings = preferences.get("daily_summary", {})
+    sections_data = summary_settings.get("sections", {})
+    
+    daily_summary = TeacherDailySummarySettings(
+        enabled=summary_settings.get("enabled", False),
+        time=summary_settings.get("time", "17:00"),
+        sections=TeacherDailySummarySections(
+            my_schedule=sections_data.get("my_schedule", True),
+            my_attendance=sections_data.get("my_attendance", True),
+            my_leaves=sections_data.get("my_leaves", True)
+        )
+    )
+    
+    return TeacherSettingsRead(
+        profile=profile,
+        daily_summary=daily_summary
+    )
